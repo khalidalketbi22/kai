@@ -1,0 +1,78 @@
+# The Liwan Ops · الليوان
+
+A multi-agent operations system for **The Liwan**, a heritage Emirati specialty coffee kiosk at Arcades, Abu Dhabi.
+It tracks stock at recipe level, analyses sales, runs the P&L and capital-payback maths, and sends owners a daily
+9pm summary and a Sunday weekly report. Anything that spends money or contacts a supplier needs an owner's approval.
+
+**Status: Phase 1:** inventory and sales from a Foodics CSV, working end to end with seed data.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the phase plan.
+
+<p>
+<img src="docs/screenshots/today.png" width="220" alt="Today dashboard">
+<img src="docs/screenshots/today-ar.png" width="220" alt="Today dashboard in Arabic">
+<img src="docs/screenshots/stock.png" width="220" alt="Stock page">
+</p>
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env            # add ANTHROPIC_API_KEY to use the agents
+npm run seed                    # menu, recipes, suppliers, owners + simulated trading 8–31 Oct 2026
+npm run liwan -- import samples/foodics-2026-11-01.csv   # a day of Foodics sales → stock depletes
+npm run liwan -- summary        # tonight's daily summary (add --lang ar for Arabic)
+npm run liwan -- pnl            # business-month-to-date P&L
+npm test                        # 77 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
+```
+
+Dashboard (phone-friendly, EN/AR):
+
+```bash
+npm run liwan -- owner --name "Partner 1" --pin 1234 --phone +971501234567
+npm run dev                     # http://localhost:8787, also starts the 21:00 / Sunday scheduler
+```
+
+Ask the agent team (needs `ANTHROPIC_API_KEY`):
+
+```bash
+npm run liwan -- ask "What should we reorder before the weekend?" --verbose
+npm run liwan -- ask "ما هو أقل مشروب مبيعاً هذا الأسبوع وهل هامشه جيد؟"
+npm run liwan -- summary --send          # daily summary + agent insights → owners on WhatsApp
+```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `seed [--reset]` | Create the database with reference data and simulated history, and write a sample CSV |
+| `import <file.csv>` | Import a Foodics order-items export. Re-importing the same file is refused, and orders already on record are skipped |
+| `stock` | Stock on hand, reorder points, days of cover, expiry |
+| `sales [--from --to]` | Sales, best/worst sellers, margin per item, orders by hour |
+| `pnl [--from --to]` | Profit & loss (default: business month to date, 8th → 7th) |
+| `summary [--weekly] [--send] [--no-agent] [--lang ar]` | Daily summary / weekly report |
+| `ask "<question>"` | Orchestrator, which routes to the Inventory or Sales agent |
+| `receive <ingredient> <packs>` | Log a supplier delivery |
+| `waste <ingredient> <qty> [--reason staff_drink]` | Log waste, staff drinks, samples |
+| `count <ingredient> <qty>` | Physical count, books the difference |
+| `expire` | Write off expired lots as waste |
+| `owner --name … [--phone] [--pin] [--locale ar] [--rename]` | Owner contact, dashboard PIN, language |
+| `serve` | Dashboard + scheduler |
+
+Drop Foodics CSVs into `data/inbox/`. They are imported automatically at 20:55, before the 21:00 summary.
+
+## Before using real numbers
+
+The seed data is **illustrative**. Edit [`src/seed/data.ts`](src/seed/data.ts) and re-seed, or update the tables directly:
+
+- supplier pack prices and which supplier carries what
+- salaries, machine lease amount, other fixed costs
+- menu prices, recipes (grams/ml per drink)
+- owner names (`owner --name "Partner 1" --rename "…"`)
+
+Then compare one real Foodics export against [`src/importers/foodics-csv.ts`](src/importers/foodics-csv.ts).
+Column names are matched by alias, so add any header your export uses to `COLUMNS`.
+
+## WhatsApp
+
+See [docs/whatsapp.md](docs/whatsapp.md) for the Meta setup and the two message templates to submit for approval.
+Until it's configured, summaries print to the console.

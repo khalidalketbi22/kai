@@ -7,6 +7,8 @@ import { formatAed } from "../domain/money.js";
 import { addDays, type ISODate } from "../domain/periods.js";
 import { cashForecast, paybackStatus, pnlBusinessMonthToDate, pnlRange, vatPosition, type CashForecast, type VatPosition } from "../domain/finance.js";
 import { listActions, type ActionView } from "../domain/approvals.js";
+import { hoursSummary, listStaff, weekRota, weekStartOf, type HoursRow, type ShiftRow } from "../domain/staff.js";
+import type { RotaGap } from "../domain/rota.js";
 import type { PaybackStatus } from "../domain/payback.js";
 import type { DailyPnl, PnlTotals } from "../domain/pnl.js";
 import { bestAndWorst, peakHours, salesSummary, type HourBucket, type ItemPerformance, type SalesSummary } from "../domain/sales.js";
@@ -26,6 +28,15 @@ export interface DailyReport {
   shortfalls: { code: string; nameEn: string; nameAr: string; unit: string; qty: number }[];
   payback: PaybackStatus;
   pendingApprovals: ActionView[];
+  tomorrow: { date: ISODate; shifts: ShiftRow[]; gaps: RotaGap[] } | null;
+}
+
+/** Tomorrow's shifts and gaps (null when no staff are on record). */
+function tomorrowRota(db: DB, date: ISODate): DailyReport["tomorrow"] {
+  const t = addDays(date, 1);
+  if (!listStaff(db, t).length) return null;
+  const r = weekRota(db, weekStartOf(t));
+  return { date: t, shifts: r.shifts.filter((s) => s.date === t), gaps: r.gaps.filter((g) => g.date === t) };
 }
 
 export function buildDailyReport(db: DB, date: ISODate): DailyReport {
@@ -47,6 +58,7 @@ export function buildDailyReport(db: DB, date: ISODate): DailyReport {
     shortfalls: shortfalls(db, date, date),
     payback: paybackStatus(db, date),
     pendingApprovals: listActions(db, ["pending_approval"]),
+    tomorrow: tomorrowRota(db, date),
   };
 }
 
@@ -68,6 +80,7 @@ export interface WeeklyReport {
   pendingApprovals: ActionView[];
   vat: VatPosition;
   cash: CashForecast;
+  staff: { hours: HoursRow[]; nextWeekStart: ISODate; nextWeekGaps: RotaGap[] } | null;
 }
 
 export function buildWeeklyReport(db: DB, endDate: ISODate): WeeklyReport {
@@ -92,6 +105,9 @@ export function buildWeeklyReport(db: DB, endDate: ISODate): WeeklyReport {
     pendingApprovals: listActions(db, ["pending_approval"]),
     vat: vatPosition(db, endDate),
     cash: cashForecast(db, endDate, 13),
+    staff: listStaff(db, endDate).length
+      ? { hours: hoursSummary(db, from, endDate), nextWeekStart: weekStartOf(addDays(endDate, 1)), nextWeekGaps: weekRota(db, weekStartOf(addDays(endDate, 1))).gaps }
+      : null,
   };
 }
 
@@ -116,6 +132,8 @@ const T = {
     approvals: "Waiting for your approval", approveAt: "Approve or reject in the dashboard", vatQ: "VAT this quarter",
     netPayable: "net payable", projected2: "projected", due: "due", cash: "Cash outlook (next 4 weeks)", lowest: "Lowest point in 13 weeks",
     noOpening: "(no opening balance set — shows change from today)",
+    tomorrowShifts: "Tomorrow's shifts", uncovered: "UNCOVERED", staffHours: "Staff hours this week", ot: "overtime",
+    nextWeekGaps: "Uncovered shifts next week", allCovered: "all shifts covered", notRostered: "no rota yet",
   },
   ar: {
     daily: "الليوان — الملخص اليومي", weekly: "الليوان — التقرير الأسبوعي", sales: "المبيعات", net: "صافي المبيعات (بدون ضريبة)", orders: "الطلبات",
@@ -127,6 +145,8 @@ const T = {
     approvals: "بانتظار موافقتك", approveAt: "وافق أو ارفض من لوحة التحكم", vatQ: "ضريبة القيمة المضافة هذا الربع",
     netPayable: "صافي المستحق", projected2: "المتوقع", due: "الاستحقاق", cash: "توقعات النقد (الأسابيع الأربعة القادمة)", lowest: "أدنى رصيد خلال ١٣ أسبوعاً",
     noOpening: "(لم يُسجل رصيد افتتاحي — الأرقام تمثل التغير من اليوم)",
+    tomorrowShifts: "مناوبات الغد", uncovered: "غير مغطاة", staffHours: "ساعات الموظفين هذا الأسبوع", ot: "إضافي",
+    nextWeekGaps: "مناوبات غير مغطاة الأسبوع القادم", allCovered: "كل المناوبات مغطاة", notRostered: "لا يوجد جدول بعد",
   },
 } as const;
 
@@ -148,6 +168,27 @@ function approvalLines(list: ActionView[], l: Locale): string[] {
   if (!list.length) return [];
   const t = T[l];
   return ["", `*${t.approvals} (${list.length})*`, ...list.map((a) => `• ${a.summary}`), t.approveAt];
+}
+
+function tomorrowLines(r: DailyReport, l: Locale): string[] {
+  if (!r.tomorrow) return [];
+  const t = T[l];
+  const rows = [
+    ...r.tomorrow.shifts.filter((s) => s.status === "planned" || s.status === "worked").map((s) => `• ${s.start}–${s.end} ${s.staffName}`),
+    ...r.tomorrow.gaps.map((g) => `• ${g.start}–${g.end} ${t.uncovered}`),
+  ];
+  return ["", `*${t.tomorrowShifts}* (${r.tomorrow.date})`, ...(rows.length ? rows : [`• ${t.notRostered}`])];
+}
+
+function staffLines(r: WeeklyReport, l: Locale): string[] {
+  if (!r.staff) return [];
+  const t = T[l];
+  return [
+    "", `*${t.staffHours}*`,
+    ...r.staff.hours.map((h) => `• ${h.name}: ${h.hours} h${h.overtimeHours ? ` (${h.overtimeHours} h ${t.ot})` : ""}${h.absent ? ` · absent ${h.absent}` : ""}${h.sick ? ` · sick ${h.sick}` : ""}`),
+    `*${t.nextWeekGaps}* (${r.staff.nextWeekStart})`,
+    ...(r.staff.nextWeekGaps.length ? r.staff.nextWeekGaps.map((g) => `• ${g.date} ${g.start}–${g.end}`) : [`• ${t.allCovered}`]),
+  ];
 }
 
 function paybackLine(p: PaybackStatus, l: Locale): string {
@@ -175,6 +216,7 @@ export function renderDailyText(r: DailyReport, l: Locale = "en"): string {
     `*${t.stock}*`,
     ...stockLines(r, l),
     ...approvalLines(r.pendingApprovals, l),
+    ...tomorrowLines(r, l),
     ``,
     `*${t.payback}*`,
     paybackLine(r.payback, l),
@@ -207,6 +249,7 @@ export function renderWeeklyText(r: WeeklyReport, l: Locale = "en"): string {
     `*${t.stock}*`,
     ...stockLines(r, l),
     ...approvalLines(r.pendingApprovals, l),
+    ...staffLines(r, l),
     ``,
     `*${t.vatQ}* (${r.vat.quarter.start} → ${r.vat.quarter.end})`,
     `${aed(r.vat.netPayableFils)} ${t.netPayable} · ${t.projected2} ${aed(r.vat.projectedNetPayableFils)} · ${t.due} ${r.vat.quarter.due}`,

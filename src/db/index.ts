@@ -23,6 +23,17 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   cash_balance_fils: "",           // last known bank + till balance, for the cash-flow forecast
   cash_balance_date: "",
   kiosk_address: "The Liwan kiosk, The Arcades, Abu Dhabi",
+  // Staff (Phase 3). Shift templates: working hours exclude the break.
+  shift_templates: JSON.stringify([
+    { code: "open", label: "Opening", start: "10:00", end: "19:00", break: 60 },
+    { code: "close", label: "Closing", start: "13:00", end: "22:00", break: 60 },
+  ]),
+  max_daily_hours: "8",
+  overtime_premium: "0.25",        // overtime = basic hourly wage + 25% …
+  night_overtime_premium: "0.5",   // … + 50% for overtime worked 22:00–04:00
+  payroll_day_divisor: "30",       // daily wage for unpaid absence = (basic + allowances) / 30
+  gratuity_days_per_year: "21",    // end-of-service accrual estimate: 21 days' basic per year of service
+  payroll_prep_day: "6",           // draft payroll on the 6th for the month ending the 7th, paid on the 8th
 };
 
 /**

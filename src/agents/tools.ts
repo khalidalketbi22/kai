@@ -14,6 +14,8 @@ import { loadRecipeBook, currentUnitCost, expiryAlerts, shortfalls, stockStatus 
 import { cashForecast, paybackStatus, pnlRange, vatPosition } from "../domain/finance.js";
 import { listActions } from "../domain/approvals.js";
 import { listPurchaseOrders, planFromDb, proposePurchaseOrders } from "../domain/purchasing.js";
+import { generateRota } from "../domain/rota.js";
+import { hoursSummary, listPayrollRuns, listStaff, payrollPeriod, preparePayrollRun, previewPayroll, restDayName, shiftTemplates, shiftsBetween, weekRota, weekStartOf } from "../domain/staff.js";
 import { addDays, todayInDubai } from "../domain/periods.js";
 import { itemPerformance, latestBusinessDate, menuMargins, peakHours, salesSummary } from "../domain/sales.js";
 import { buildDailyReport, buildWeeklyReport } from "../reports/reports.js";
@@ -119,6 +121,35 @@ export function toolHandlers(db: DB) {
     get_purchase_orders: async (a: { status?: string }) => ({ orders: listPurchaseOrders(db, a.status ? [a.status] : undefined, 20) }),
     get_vat_position: async (a: { date?: string }) => vatPosition(db, d(a.date)),
     get_cash_forecast: async (a: { date?: string; weeks?: number }) => cashForecast(db, d(a.date), a.weeks ?? 13),
+    // Staff — bank details and ID numbers are deliberately left out of everything the model sees.
+    get_staff: async () => ({
+      staff: listStaff(db).map((s) => ({ id: s.id, name: s.name, role: s.role, restDay: restDayName(s.restDay), maxWeeklyHours: s.maxWeeklyHours, startDate: s.startDate, endDate: s.endDate,
+        monthlyPackageFils: s.basicFils + s.housingFils + s.transportFils + s.otherFils, basicFils: s.basicFils })),
+      shiftTemplates: shiftTemplates(db),
+    }),
+    get_rota: async (a: { week_start?: string }) => {
+      const r = weekRota(db, weekStartOf(a.week_start ?? todayInDubai()));
+      return { ...r, shifts: r.shifts.map(({ id, staffName, date, template, start, end, status, hours }) => ({ id, staffName, date, template, start, end, status, hours })) };
+    },
+    get_rota_plan: async (a: { week_start?: string }) => {
+      const ws = weekStartOf(a.week_start ?? todayInDubai());
+      const existing = shiftsBetween(db, ws, addDays(ws, 6)).map((s) => ({ date: s.date, staffId: s.staffId, template: s.template, start: s.start, end: s.end, breakMinutes: s.breakMinutes }));
+      const staff = listStaff(db);
+      const plan = generateRota(ws, staff, shiftTemplates(db), existing);
+      const name = new Map(staff.map((s) => [s.id, s.name]));
+      return { weekStart: ws, note: "Dry run — an owner creates the rota in the dashboard (Staff) or with `liwan rota --generate`.",
+        wouldAdd: plan.shifts.map((x) => ({ ...x, staff: name.get(x.staffId) })), gaps: plan.gaps };
+    },
+    get_hours: async (a: { from: string; to: string }) => ({ from: a.from, to: a.to, staff: hoursSummary(db, a.from, a.to) }),
+    get_payroll_preview: async (a: { date?: string }) => {
+      const p = payrollPeriod(db, a.date ?? todayInDubai());
+      return { period: p, lines: previewPayroll(db, p), recentRuns: listPayrollRuns(db, 3).map(({ lines, sheetPath, ...r }) => r) };
+    },
+    propose_payroll_run: async (a: { date?: string }) => {
+      const { run, created } = preparePayrollRun(db, a.date ?? todayInDubai(), "staff-agent");
+      return { created, run: { number: run.number, periodStart: run.periodStart, periodEnd: run.periodEnd, payDate: run.payDate, status: run.status, netFils: run.netFils, staff: run.lines.length },
+        note: created ? "Payroll is WAITING FOR AN OWNER'S APPROVAL (dashboard → Approvals). No money has moved." : `A payroll run for this period already exists (${run.status}).` };
+    },
   };
 }
 
@@ -165,6 +196,18 @@ export function createLiwanMcpServer(db: DB) {
       tool("get_purchase_orders", "Recent purchase orders with lines and status (pending_approval, approved, sent, received, cancelled).", { status: z.string().optional() }, wrap(h.get_purchase_orders), ro),
       tool("get_vat_position", "UAE VAT for the current quarter: output VAT on sales, input VAT on supplier deliveries, net payable now and projected at quarter end, due date.", { date: DATE.optional() }, wrap(h.get_vat_position), ro),
       tool("get_cash_forecast", "Week-by-week cash-flow forecast (default 13 weeks): takings, restocking, rent, salaries/fixed costs on the 8th, VAT payments, closing balance, lowest point.", { date: DATE.optional(), weeks: z.number().int().min(1).max(26).optional() }, wrap(h.get_cash_forecast), ro),
+      tool("get_staff", "Staff list: role, rest day, weekly hour cap, start/end dates, monthly package. Also the shift templates.", {}, wrap(h.get_staff), ro),
+      tool("get_rota", "The rota for the Monday–Sunday week containing week_start: shifts, uncovered shifts (gaps) and compliance warnings.", { week_start: DATE.optional() }, wrap(h.get_rota), ro),
+      tool("get_rota_plan", "Dry run: who the rota generator would put on each empty shift that week, and which shifts would stay uncovered. Creates nothing.", { week_start: DATE.optional() }, wrap(h.get_rota_plan), ro),
+      tool("get_hours", "Hours per person in a date range: shifts, hours, overtime hours, absent / sick / leave days.", range, wrap(h.get_hours), ro),
+      tool("get_payroll_preview", "Payroll preview for the business month (8th → 7th) containing date: per-person basic, allowances, overtime, absence deductions, adjustments, net. Plus recent runs.", { date: DATE.optional() }, wrap(h.get_payroll_preview), ro),
+      tool(
+        "propose_payroll_run",
+        "Draft the payroll run for the period containing date, WAITING FOR OWNER APPROVAL. Moves no money. Safe to call again: returns the existing run for that period.",
+        { date: DATE.optional() },
+        wrap(h.propose_payroll_run),
+        { annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } },
+      ),
       tool("get_weekly_report", "Everything for the weekly report (7 days ending end_date): sales vs previous week, P&L, best/worst, peak hours, stock alerts, payback.", { end_date: DATE.optional() }, wrap(h.get_weekly_report), ro),
     ],
   });

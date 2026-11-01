@@ -76,7 +76,25 @@ For a better cash forecast, record your bank + till balance now and then:
 npm run liwan -- cash --balance 25000
 ```
 
-## 6. Open the dashboard on your phone
+## 6. Staff, rota and payroll
+
+Add your team once:
+
+```bash
+npm run liwan -- staff add --name "Aisha" --basic 4000 --housing 2000 --transport 500 --rest-day Friday --start 2026-10-08 --iban AE07…
+npm run liwan -- rota --generate
+```
+
+Or re-run `npm run setup`, which now asks about staff.
+
+- **Every Thursday** next week's rota is filled in automatically, and you get an email if a shift is uncovered.
+- **On the Staff page**, change a shift to *sick*, *absent* or *leave* when it happens. Payroll uses this.
+- **On the 6th** you get "payroll to approve". Check it under Approvals, approve it, then download the payment sheet
+  from the Staff page for your bank or WPS agent. After the transfer on the 8th, tap **Mark as paid**.
+
+The payment sheets in `data/payroll/` contain salaries and IBANs. Keep them private; they are never uploaded to GitHub.
+
+## 7. Open the dashboard on your phone
 
 - **Same Wi-Fi:** find the computer's local IP (Mac: System Settings → Wi-Fi → Details; Windows: `ipconfig`) and
   open `http://<that-ip>:8787` on your phone.
@@ -84,7 +102,7 @@ npm run liwan -- cash --balance 25000
   `http://<computer-name>:8787`. Nothing is exposed to the public internet. If you do this, set `DASHBOARD_URL` in
   `.env` to that address so the email buttons open it.
 
-## 7. Updating to a new version
+## 8. Updating to a new version
 
 In Terminal: press `Ctrl + C` to stop the app, then:
 

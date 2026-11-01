@@ -62,3 +62,23 @@ describe("dashboard approvals", () => {
     expect(html).toContain("VAT this quarter");
   });
 });
+
+describe("dashboard staff page", () => {
+  it("shows the rota with gaps, assigns only free people, and updates a shift", async () => {
+    const { addStaff, generateWeekRota, shiftsBetween } = await import("../src/domain/staff.js");
+    const db = freshDb();
+    addStaff(db, { name: "Aisha", basicFils: 400_000, restDay: 5, startDate: "2026-10-08" });
+    addStaff(db, { name: "Rahul", basicFils: 350_000, restDay: 2, startDate: "2026-10-08" });
+    generateWeekRota(db, "2026-11-02");
+    const app = createApp(db);
+    const html = await (await app.request(`${BASE}/staff?week=2026-11-02`, { headers: { Cookie: cookie(1) } })).text();
+    expect(html).toContain("Uncovered");
+    expect(html).toContain("nobody free");
+    const s = shiftsBetween(db, "2026-11-02", "2026-11-02")[0];
+    const r = await app.request(`${BASE}/shifts/${s.id}?week=2026-11-02`, { method: "POST", headers: { Cookie: cookie(1), Origin: BASE, "Content-Type": "application/x-www-form-urlencoded" }, body: "status=sick" });
+    expect(r.status).toBe(302);
+    expect(shiftsBetween(db, "2026-11-02", "2026-11-02").find((x) => x.id === s.id)!.status).toBe("sick");
+    const bad = await app.request(`${BASE}/shifts/${s.id}`, { method: "POST", headers: { Cookie: cookie(1), Origin: BASE, "Content-Type": "application/x-www-form-urlencoded" }, body: "status=fired" });
+    expect(bad.headers.get("location")).toMatch(/error=/);
+  });
+});

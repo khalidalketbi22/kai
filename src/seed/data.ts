@@ -89,3 +89,10 @@ export const FIXED_COSTS = [
   { name: "Utilities & mall service charge", category: "utilities", monthlyAed: 800, start: "2026-10-08", end: null },
   { name: "Foodics subscription", category: "software", monthlyAed: 400, start: "2026-10-08", end: null },
 ];
+
+/** Demo staff (demo seed only — real staff are added with `npm run setup` or `liwan staff add`). */
+export const DEMO_STAFF = [
+  { name: "Aisha", role: "barista", basicAed: 4_000, housingAed: 2_000, transportAed: 500, otherAed: 0, restDay: "Friday", maxHours: 48, start: "2026-10-08", iban: "AE070331234567890123456" },
+  { name: "Rahul", role: "barista", basicAed: 3_500, housingAed: 2_000, transportAed: 500, otherAed: 500, restDay: "Tuesday", maxHours: 48, start: "2026-10-08", iban: "AE460260001015123456789" },
+  { name: "Sara", role: "part-time", basicAed: 1_800, housingAed: 0, transportAed: 300, otherAed: 0, restDay: "Monday", maxHours: 24, start: "2026-10-08", iban: null },
+];

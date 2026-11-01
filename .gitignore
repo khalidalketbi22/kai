@@ -3,3 +3,7 @@ data/*.db
 data/*.db-*
 .env
 coverage/
+data/payroll/
+data/payroll-test/
+data/inbox/
+data/imported/

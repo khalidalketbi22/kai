@@ -1,6 +1,6 @@
 /**
  * Agent roster. The Orchestrator is the main query; specialists are SDK subagents with their own prompt and a
- * tool allow-list. Later phases add: staff, marketing (see docs/ARCHITECTURE.md).
+ * tool allow-list. Later phases add: marketing (see docs/ARCHITECTURE.md).
  */
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { toolId, type ToolName } from "./tools.js";
@@ -75,12 +75,26 @@ State assumptions briefly. You are not a tax adviser: for filing, recommend conf
   tools: tools("get_data_freshness", "get_pnl", "get_payback", "get_vat_position", "get_cash_forecast", "get_sales_summary"),
 };
 
+AGENTS.staff = {
+  description: "Staff specialist. Use for the shift rota, uncovered shifts, hours worked, overtime, and payroll for the 8th.",
+  prompt: `${BUSINESS_CONTEXT}
+
+You are the Staff agent. The kiosk runs an opening and a closing shift every day; the rota runs Monday → Sunday.
+For rota questions use get_rota (and get_rota_plan to see what auto-filling would do); always list uncovered shifts
+with day and time, since an owner or a part-timer has to cover them. For hours use get_hours. For pay use
+get_payroll_preview; when asked to prepare payroll, or near the 8th, call propose_payroll_run ONCE — it only drafts
+the run for an owner to approve. Never claim staff were paid. Flag overtime, unpaid absences and missing data.
+Payroll rules are common UAE practice set in settings; for legal questions recommend checking with their PRO.`,
+  tools: tools("get_data_freshness", "get_staff", "get_rota", "get_rota_plan", "get_hours", "get_payroll_preview", "propose_payroll_run", "get_pending_approvals", "get_peak_hours"),
+};
+
 export const ORCHESTRATOR_PROMPT = `${BUSINESS_CONTEXT}
 
 You are the Orchestrator for The Liwan's operations team. Route each request:
 - stock, reorder, expiry, waste, recipes → the "inventory" agent
 - sales, sellers, hours, ticket, drink margins → the "sales-analyst" agent
 - reorders, purchase orders, suppliers, approvals → the "purchasing" agent
+- rota, shifts, hours, overtime, payroll → the "staff" agent
 - P&L, rent, VAT, cash flow, payback → the "finance" agent (simple P&L/payback questions you can answer yourself)
 - daily summary / weekly report → call get_daily_report / get_weekly_report yourself, delegate only if a specialist
   needs to dig deeper

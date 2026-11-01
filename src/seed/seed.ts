@@ -12,7 +12,9 @@ import { eachDay } from "../domain/periods.js";
 import { ingredientIdByCode, onHand, receiveStock, recordWaste, writeOffExpired } from "../domain/inventory.js";
 import { parseFoodicsCsv } from "../importers/foodics-csv.js";
 import { ingestSales } from "../importers/ingest.js";
-import { CAPITAL_DATE, CAPITAL_PER_OWNER_AED, FIXED_COSTS, INGREDIENTS, MENU, MODIFIERS, OWNERS, SUPPLIERS } from "./data.js";
+import { addStaff, generateWeekRota, parseRestDay, weekStartOf } from "../domain/staff.js";
+import { addDays } from "../domain/periods.js";
+import { DEMO_STAFF, CAPITAL_DATE, CAPITAL_PER_OWNER_AED, FIXED_COSTS, INGREDIENTS, MENU, MODIFIERS, OWNERS, SUPPLIERS } from "./data.js";
 import { generateFoodicsCsv } from "./generate-sales.js";
 
 export function seedReferenceData(db: DB): void {
@@ -112,4 +114,17 @@ export function simulateHistory(db: DB, from: string, to: string): SimulationRes
     recordWaste(db, "beans_espresso", 54, `${day}T22:15:00`, "staff drinks + dial-in", "staff_drink");
   }
   return { days: eachDay(from, to).length, orders, deliveries };
+}
+
+/** Demo staff with rotas from trading start through the week containing `through` (+1 week ahead). */
+export function seedDemoStaff(db: DB, from: string, through: string): number {
+  for (const st of DEMO_STAFF) {
+    addStaff(db, { name: st.name, role: st.role, basicFils: aedToFils(st.basicAed), housingFils: aedToFils(st.housingAed), transportFils: aedToFils(st.transportAed),
+      otherFils: aedToFils(st.otherAed), restDay: parseRestDay(st.restDay), maxWeeklyHours: st.maxHours, startDate: st.start, iban: st.iban });
+  }
+  let shifts = 0;
+  for (let ws = weekStartOf(from); ws <= addDays(through, 7); ws = addDays(ws, 7)) shifts += generateWeekRota(db, ws).created;
+  // Shifts before trading start don't exist
+  db.prepare("DELETE FROM shifts WHERE date < ?").run(from);
+  return shifts;
 }

@@ -10,16 +10,17 @@ import { configuredNotifiers } from "./integrations/notify.js";
 import { openDb, type DB } from "./db/index.js";
 import { currentUnitCost, ingredientIdByCode, recordCount, recordWaste, receiveStock, stockStatus, writeOffExpired } from "./domain/inventory.js";
 import { formatAed } from "./domain/money.js";
-import { addDays, todayInDubai } from "./domain/periods.js";
+import { addDays, dayOfWeek, todayInDubai } from "./domain/periods.js";
 import { latestBusinessDate, itemPerformance, peakHours, salesSummary } from "./domain/sales.js";
 import { cashForecast, pnlRange, vatPosition } from "./domain/finance.js";
 import { approveAndExecute, decideAction, listActions, markPurchaseOrderSent, receivePurchaseOrder } from "./domain/approvals.js";
+import { addPayrollAdjustment, addStaff, assignShift, DAY_NAMES, generateWeekRota, hoursSummary, listPayrollRuns, listStaff, markPayrollPaid, parseRestDay, payrollPeriod, preparePayrollRun, previewPayroll, restDayName, staffByName, updateShift, updateStaff, weekRota, weekStartOf } from "./domain/staff.js";
 import { getPurchaseOrder, listPurchaseOrders, planFromDb, poNumber, proposePurchaseOrders } from "./domain/purchasing.js";
 import { FoodicsCsvSource } from "./importers/foodics-csv.js";
 import { ingestSales } from "./importers/ingest.js";
 import { buildDailyReport, buildWeeklyReport, renderDailyText, renderWeeklyText } from "./reports/reports.js";
-import { notifyApprovalsNeeded, sendDailySummary, sendWeeklyReport } from "./reports/summary.js";
-import { seedReferenceData, simulateHistory } from "./seed/seed.js";
+import { notifyApprovalsNeeded, notifyPayrollNeeded, sendDailySummary, sendWeeklyReport } from "./reports/summary.js";
+import { seedDemoStaff, seedReferenceData, simulateHistory } from "./seed/seed.js";
 import { generateFoodicsCsv } from "./seed/generate-sales.js";
 import { setOwnerPin } from "./web/auth.js";
 
@@ -56,6 +57,20 @@ const HELP = `The Liwan Ops
   suppliers                          Supplier contacts and terms.
   supplier --name N [--email] [--whatsapp] [--contact] [--lead-days] [--min-order AED]
 
+  Staff & payroll
+  staff                              Staff list with packages and rest days.
+  staff add --name N --basic AED [--housing AED] [--transport AED] [--other AED] --rest-day Friday --start D
+            [--email] [--phone] [--iban AE…] [--id 784-…] [--role barista] [--max-hours 48]
+  staff update --name N [any of the above] [--end D (last day)] [--rename NEW]
+  rota [--week D] [--generate]       The week's rota; --generate fills empty shifts (rest days, 48 h cap respected).
+  assign <date> <open|close> <name> [--force]  Put someone on a shift (cover a gap or swap). --force allows a double shift.
+  shift <id> --status sick|absent|leave|worked [--start HH:MM --end HH:MM] [--note …]
+  hours [--from D --to D]            Hours, overtime and absences (default: this business month).
+  payroll [--date D]                 Preview pay for the business month (8th → 7th).
+  payroll prepare                    Draft the payroll run for owner approval (also automatic on the 6th).
+  payroll adjust <name> <±AED> --note "Eid bonus"     One-off bonus (+) or deduction / advance recovery (−).
+  payroll runs                       Past runs.        payroll paid <run>   Mark a run as paid after the transfer.
+
   Finance
   vat                                VAT position for the current quarter.
   forecast                           13-week cash-flow forecast.
@@ -72,7 +87,10 @@ const { positionals, values } = parseArgs({
     verbose: { type: "boolean" }, reason: { type: "string" }, note: { type: "string" },
     name: { type: "string" }, phone: { type: "string" }, email: { type: "string" }, "preview-email": { type: "string" }, pin: { type: "string" }, locale: { type: "string" }, rename: { type: "string" },
     "no-scheduler": { type: "boolean" }, "dry-run": { type: "boolean" }, "no-notify": { type: "boolean" }, owner: { type: "string" },
-    status: { type: "string" }, whatsapp: { type: "string" }, contact: { type: "string" }, "lead-days": { type: "string" }, "min-order": { type: "string" }, balance: { type: "string" }, help: { type: "boolean", short: "h" },
+    status: { type: "string" }, whatsapp: { type: "string" }, contact: { type: "string" }, "lead-days": { type: "string" }, "min-order": { type: "string" }, balance: { type: "string" },
+    basic: { type: "string" }, housing: { type: "string" }, transport: { type: "string" }, other: { type: "string" }, "rest-day": { type: "string" },
+    start: { type: "string" }, end: { type: "string" }, iban: { type: "string" }, id: { type: "string" }, role: { type: "string" }, "max-hours": { type: "string" },
+    week: { type: "string" }, generate: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
 
@@ -97,6 +115,7 @@ async function main() {
     if (values.empty) return console.log(`Created ${config.dbPath} with menu, recipes and suppliers (no sales). Record opening stock with: count <ingredient> <qty>`);
     const through = values.through ?? "2026-10-31";
     const sim = simulateHistory(db, "2026-10-08", through);
+    seedDemoStaff(db, "2026-10-08", through);
     const sampleDate = values["sample-date"] ?? addDays(through, 1);
     mkdirSync("samples", { recursive: true });
     const samplePath = `samples/foodics-${sampleDate}.csv`;
@@ -336,6 +355,112 @@ async function main() {
       upsert.run("cash_balance_fils", String(Math.round(Number(values.balance) * 100)));
       upsert.run("cash_balance_date", values.date ?? todayInDubai());
       return console.log(`Cash balance recorded: ${formatAed(Math.round(Number(values.balance) * 100))} on ${values.date ?? todayInDubai()}.`);
+    }
+    case "staff": {
+      const sub = args[0] ?? "list";
+      const fils = (v?: string) => (v === undefined ? undefined : Math.round(Number(v) * 100));
+      if (sub === "add") {
+        if (!values.name || !values.basic || !values.start) throw new Error('Usage: staff add --name "Aisha" --basic 4000 --housing 2000 --transport 500 --rest-day Friday --start 2026-10-08');
+        const id = addStaff(db, {
+          name: values.name, role: values.role, email: values.email, phone: values.phone, basicFils: fils(values.basic)!, housingFils: fils(values.housing), transportFils: fils(values.transport),
+          otherFils: fils(values.other), restDay: values["rest-day"] ? parseRestDay(values["rest-day"]) : undefined, maxWeeklyHours: values["max-hours"] ? Number(values["max-hours"]) : undefined,
+          startDate: values.start, iban: values.iban, personalId: values.id,
+        });
+        return console.log(`Added ${values.name} (#${id}). Build the rota with: npm run liwan -- rota --generate`);
+      }
+      if (sub === "update") {
+        if (!values.name) throw new Error('Usage: staff update --name "Aisha" [--basic …] [--rest-day …] [--end 2027-01-31] [--rename …]');
+        const st = staffByName(db, values.name);
+        updateStaff(db, st.id, {
+          name: values.rename, role: values.role, email: values.email, phone: values.phone, basicFils: fils(values.basic), housingFils: fils(values.housing),
+          transportFils: fils(values.transport), otherFils: fils(values.other), restDay: values["rest-day"] ? parseRestDay(values["rest-day"]) : undefined,
+          maxWeeklyHours: values["max-hours"] ? Number(values["max-hours"]) : undefined, startDate: values.start, endDate: values.end, iban: values.iban, personalId: values.id,
+        });
+        return console.log(`Updated ${values.rename ?? st.name}.`);
+      }
+      const list = listStaff(db);
+      if (!list.length) return console.log('No staff yet. Add with: npm run liwan -- staff add --name "…" --basic 4000 --housing 2000 --transport 500 --rest-day Friday --start 2026-10-08');
+      for (const x of list) {
+        console.log(`${x.name.padEnd(14)} ${x.role.padEnd(8)} package ${formatAed(x.basicFils + x.housingFils + x.transportFils + x.otherFils).padStart(12)} (basic ${formatAed(x.basicFils)})  rest ${restDayName(x.restDay).padEnd(9)} from ${x.startDate}${x.endDate ? ` to ${x.endDate}` : ""}${x.iban ? "" : "  ⚠ no IBAN"}`);
+      }
+      return;
+    }
+    case "rota": {
+      const ws = weekStartOf(values.week ?? todayInDubai());
+      const r = values.generate ? generateWeekRota(db, ws) : weekRota(db, ws);
+      if (values.generate) console.log(`Added ${(r as any).created} shift(s).`);
+      console.log(`Rota ${r.weekStart} → ${r.weekEnd}\n`);
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(ws, i);
+        const cells = r.templates.map((t) => {
+          const sh = r.shifts.filter((x) => x.date === d && x.template === t.code);
+          const on = sh.filter((x) => x.status === "planned" || x.status === "worked").map((x) => `${x.staffName} (#${x.id})`);
+          const off = sh.filter((x) => x.status !== "planned" && x.status !== "worked").map((x) => `${x.staffName} ${x.status}`);
+          return `${t.label} ${t.start}–${t.end}: ${on.length ? on.join(", ") : "⚠ UNCOVERED"}${off.length ? ` [${off.join(", ")}]` : ""}`;
+        });
+        console.log(`${DAY_NAMES[dayOfWeek(d)].slice(0, 3)} ${d}  ${cells.join("   ")}`);
+      }
+      if (r.warnings.length) console.log(`\n${r.warnings.map((w) => `⚠ ${w.message}`).join("\n")}`);
+      if (!values.generate && r.shifts.length === 0) console.log("\nNo shifts yet — run with --generate.");
+      return;
+    }
+    case "assign": {
+      const [date, template, ...nameParts] = args;
+      if (!date || !template || !nameParts.length) throw new Error("Usage: assign <date> <open|close> <staff name>");
+      const st = staffByName(db, nameParts.join(" "));
+      const id = assignShift(db, date, template, st.id, { force: Boolean(values.force) });
+      return console.log(`${st.name} is on the ${template} shift on ${date} (#${id}).`);
+    }
+    case "shift": {
+      const id = Number(args[0]);
+      if (!id) throw new Error("Usage: shift <id> --status sick|absent|leave|worked [--start HH:MM --end HH:MM] [--note …]");
+      const status = values.status as any;
+      if (status && !["planned", "worked", "absent", "sick", "leave"].includes(status)) throw new Error("Status must be planned, worked, absent, sick or leave");
+      updateShift(db, id, { status, actualStart: values.start, actualEnd: values.end, note: values.note });
+      return console.log(`Shift #${id} updated.`);
+    }
+    case "hours": {
+      const to = values.to ?? todayInDubai();
+      const from = values.from ?? payrollPeriod(db, to).start;
+      console.log(`Hours ${from} → ${to}\n`);
+      for (const h of hoursSummary(db, from, to)) console.log(`${h.name.padEnd(14)} ${String(h.shifts).padStart(3)} shifts ${String(h.hours).padStart(6)} h  overtime ${h.overtimeHours} h${h.absent ? `  absent ${h.absent}` : ""}${h.sick ? `  sick ${h.sick}` : ""}${h.leave ? `  leave ${h.leave}` : ""}`);
+      return;
+    }
+    case "payroll": {
+      const sub = args[0] ?? "preview";
+      if (sub === "prepare") {
+        const { run, created, refreshed } = preparePayrollRun(db, values.date ?? todayInDubai(), "owner-cli");
+        if (refreshed) return console.log(`${run.number} recalculated (shifts or adjustments changed): AED ${(run.netFils / 100).toFixed(2)} net. Still waiting for approval.`);
+        if (!created) return console.log(`${run.number} already exists (${run.status}) and is up to date.`);
+        const r = await notifyPayrollNeeded(db, run);
+        return console.log(`${run.number} drafted: AED ${(run.netFils / 100).toFixed(2)} net for ${run.lines.length} staff, pay on ${run.payDate}. Owners notified (${r.sent}). Approve with: npm run liwan -- approve ${run.actionId} --owner "<name>"`);
+      }
+      if (sub === "adjust") {
+        const [, name, amount] = args;
+        if (!name || amount === undefined || !values.note) throw new Error('Usage: payroll adjust "<name>" <±AED> --note "Eid bonus"');
+        const st = staffByName(db, name);
+        const p = payrollPeriod(db, values.date ?? todayInDubai());
+        addPayrollAdjustment(db, st.id, p.start, Math.round(Number(amount) * 100), values.note);
+        return console.log(`Recorded ${Number(amount) >= 0 ? "+" : ""}AED ${Number(amount).toFixed(2)} for ${st.name} in the payroll for ${p.start} → ${p.end}.`);
+      }
+      if (sub === "runs") {
+        const runs = listPayrollRuns(db);
+        if (!runs.length) return console.log("No payroll runs yet.");
+        for (const r of runs) console.log(`#${r.id}  ${r.number}  ${r.status.padEnd(16)} AED ${(r.netFils / 100).toFixed(2).padStart(10)}  pay ${r.payDate}${r.sheetPath ? `  sheet ${r.sheetPath}` : ""}${r.paidAt ? `  paid ${r.paidAt.slice(0, 10)}` : ""}`);
+        return;
+      }
+      if (sub === "paid") {
+        markPayrollPaid(db, Number(args[1]));
+        return console.log(`Payroll run #${args[1]} marked as paid.`);
+      }
+      const p = payrollPeriod(db, values.date ?? todayInDubai());
+      const lines = previewPayroll(db, p);
+      console.log(`Payroll preview ${p.start} → ${p.end} (pay on ${p.payDate})\n`);
+      for (const l of lines) {
+        console.log(`${l.name.padEnd(14)} basic ${formatAed(l.basicFils).padStart(12)}  allow. ${formatAed(l.allowancesFils).padStart(12)}  OT ${formatAed(l.overtimeFils).padStart(10)}  −abs ${formatAed(l.absenceFils).padStart(10)}  adj ${formatAed(l.adjustmentsFils).padStart(10)}  NET ${formatAed(l.netFils).padStart(12)}`);
+        if (l.notes.length) console.log(`${"".padEnd(15)}${l.notes.join("; ")}`);
+      }
+      return console.log(`\nTotal net ${formatAed(lines.reduce((t, l) => t + l.netFils, 0))}`);
     }
     case "owners": {
       const channels = configuredNotifiers().map((n) => n.channel).join(" + ");

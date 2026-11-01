@@ -5,7 +5,12 @@ export type Lang = "en" | "ar";
 
 export const L = {
   en: {
-    today: "Today", stock: "Stock", sales: "Sales", approvals: "Approvals", finance: "Finance", logout: "Log out",
+    today: "Today", stock: "Stock", sales: "Sales", approvals: "Approvals", finance: "Finance", staff: "Staff", logout: "Log out",
+    rota: "Rota", day: "Day", uncoveredShift: "Uncovered", nobodyFree: "nobody free — owner / part-timer", assign: "Assign", fillRota: "Fill empty shifts", prevWeek: "← Previous", nextWeek: "Next →",
+    hoursMonth: "Hours this business month", shifts: "Shifts", hours: "Hours", overtime: "Overtime", absences: "Absent / sick",
+    payroll: "Payroll", preparePayroll: "Send payroll for approval", updatePayroll: "Update the payroll waiting for approval", payrollStale: "Shifts changed since this was drafted.", recalculate: "Recalculate", payDate: "Pay date", runs: "Payroll runs", sheet: "Payment sheet",
+    markPaid: "Mark as paid", noStaff: "No staff yet. Add them in the terminal: npm run liwan -- staff add --name … --basic … --start …",
+    save: "Save", status: "Status", netPay: "Net pay", basicAllow: "Basic + allowances", deductions: "Deductions", rosteredNote: "Upcoming shifts count as rostered until marked otherwise.",
     pendingTitle: "Waiting for approval", nothingPending: "Nothing waiting for approval.", approve: "Approve", reject: "Reject",
     anyOwner: "Any one owner can approve. Approved orders are emailed to the supplier, or prepared for you to send.",
     belowMin: "Below the supplier's minimum order", awaitingDelivery: "Approved / on the way", markSent: "Mark as sent",
@@ -27,7 +32,12 @@ export const L = {
     week: "Last 7 days", vat: "VAT collected", cogs: "COGS", waste: "Waste & staff drinks", fixed: "Fixed costs",
   },
   ar: {
-    today: "اليوم", stock: "المخزون", sales: "المبيعات", approvals: "الموافقات", finance: "المالية", logout: "خروج",
+    today: "اليوم", stock: "المخزون", sales: "المبيعات", approvals: "الموافقات", finance: "المالية", staff: "الموظفون", logout: "خروج",
+    rota: "جدول المناوبات", day: "اليوم", uncoveredShift: "غير مغطاة", nobodyFree: "لا يوجد موظف متاح — شريك / دوام جزئي", assign: "تعيين", fillRota: "املأ المناوبات الفارغة", prevWeek: "→ السابق", nextWeek: "التالي ←",
+    hoursMonth: "الساعات هذا الشهر التشغيلي", shifts: "المناوبات", hours: "الساعات", overtime: "إضافي", absences: "غياب / مرض",
+    payroll: "الرواتب", preparePayroll: "أرسل الرواتب للموافقة", updatePayroll: "حدّث الرواتب المنتظرة للموافقة", payrollStale: "تغيرت المناوبات منذ إعداد هذه الرواتب.", recalculate: "أعد الحساب", payDate: "موعد الدفع", runs: "دفعات الرواتب", sheet: "كشف الدفع",
+    markPaid: "تم الدفع", noStaff: "لا يوجد موظفون بعد. أضفهم من الطرفية: npm run liwan -- staff add --name … --basic … --start …",
+    save: "حفظ", status: "الحالة", netPay: "صافي الراتب", basicAllow: "الأساسي + البدلات", deductions: "الخصومات", rosteredNote: "تُحسب المناوبات القادمة حسب الجدول ما لم يُسجل غير ذلك.",
     pendingTitle: "بانتظار الموافقة", nothingPending: "لا يوجد ما ينتظر الموافقة.", approve: "موافقة", reject: "رفض",
     anyOwner: "تكفي موافقة شريك واحد. تُرسل الطلبات الموافق عليها للمورد بالبريد، أو تُجهز لترسلها بنفسك.",
     belowMin: "أقل من الحد الأدنى لطلب المورد", awaitingDelivery: "موافق عليها / في الطريق", markSent: "تم الإرسال",
@@ -92,12 +102,14 @@ button.secondary{background:transparent;color:var(--ink);border:1px solid var(--
 pre.msg{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;font:13px/1.45 ui-monospace,Menlo,monospace;margin:8px 0;user-select:all}
 .meta{color:var(--muted);font-size:13px}.warn{color:var(--warn);font-size:13px;font-weight:600}
 nav{display:flex;flex-wrap:wrap;gap:2px}
+select.inline{width:auto;padding:4px 6px;font-size:13px}button.small{width:auto;margin:0;padding:5px 10px;font-size:13px}
+form.inline{display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap}
 .datepick{display:flex;gap:8px;align-items:center;margin-bottom:12px}.datepick input{width:auto;padding:6px 8px;font-size:14px}.datepick button{width:auto;margin:0;padding:7px 12px;font-size:13px}
 `;
 
 export function Page(props: { title: string; lang: Lang; active?: string; owner?: string | null; pending?: number; children: Child }) {
   const t = L[props.lang];
-  const navItem = (href: string, key: "today" | "stock" | "sales" | "approvals" | "finance", badge = 0) => (
+  const navItem = (href: string, key: "today" | "stock" | "sales" | "approvals" | "finance" | "staff", badge = 0) => (
     <a href={href} class={props.active === key ? "on" : ""}>{t[key]}{badge > 0 && <span class="count">{badge}</span>}</a>
   );
   return (
@@ -113,7 +125,7 @@ export function Page(props: { title: string; lang: Lang; active?: string; owner?
           <header>
             <div class="bar">
               <span class="logo">The Liwan <small>الليوان</small></span>
-              <nav>{navItem("/", "today")}{navItem("/stock", "stock")}{navItem("/sales", "sales")}{navItem("/approvals", "approvals", props.pending ?? 0)}{navItem("/finance", "finance")}</nav>
+              <nav>{navItem("/", "today")}{navItem("/stock", "stock")}{navItem("/sales", "sales")}{navItem("/approvals", "approvals", props.pending ?? 0)}{navItem("/staff", "staff")}{navItem("/finance", "finance")}</nav>
               <span class="tools">
                 <a href={`/lang/${props.lang === "ar" ? "en" : "ar"}`}>{props.lang === "ar" ? "English" : "العربية"}</a>
                 <a href="/logout">{t.logout}</a>

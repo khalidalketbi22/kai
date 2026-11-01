@@ -20,7 +20,8 @@ describe("agent tools", () => {
       for (const t of a.tools ?? []) {
         expect(t).toMatch(/^mcp__liwan__(get_|propose_)/);
         expect(t).not.toMatch(/(^|_)(approve|reject|execute|send|pay|payment|receive)(_|s?$)/);
-        if (t.includes("propose_")) expect(name).toBe("purchasing"); // only purchasing can draft orders
+        if (t.includes("propose_purchase")) expect(name).toBe("purchasing"); // only purchasing drafts orders
+        if (t.includes("propose_payroll")) expect(name).toBe("staff");       // only staff drafts payroll
       }
     }
     for (const t of ORCHESTRATOR_TOOLS) expect(t).toMatch(/^mcp__liwan__get_/);

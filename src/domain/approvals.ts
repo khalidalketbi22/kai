@@ -16,6 +16,7 @@ import { config, emailConfigured } from "../config.js";
 import { EmailNotifier } from "../integrations/notifiers/email.js";
 import { receiveStock } from "./inventory.js";
 import { todayInDubai } from "./periods.js";
+import { executePayrollRun } from "./staff.js";
 import { composePurchaseOrderMessage, expectedDelivery, getPurchaseOrder, poNumber } from "./purchasing.js";
 
 export type ActionStatus = "pending_approval" | "approved" | "rejected" | "executed" | "failed";
@@ -75,6 +76,9 @@ export function decideAction(db: DB, actionId: number, ownerId: number, decision
   if (a.type === "send_purchase_order" && next === "approved") {
     db.prepare("UPDATE purchase_orders SET status = 'approved' WHERE id = ? AND status = 'pending_approval'").run(a.payload.poId);
   }
+  if (a.type === "payroll_run" && next === "rejected") {
+    db.prepare("UPDATE payroll_runs SET status = 'cancelled' WHERE id = ? AND status = 'pending_approval'").run(a.payload.runId);
+  }
   return a;
 }
 
@@ -120,6 +124,8 @@ export async function executeAction(db: DB, actionId: number, sender: SupplierSe
         const why = po.supplierEmail ? "email sending isn't set up yet (SMTP)" : `there's no email on record for ${po.supplier}`;
         result = `${po.number} approved — ${why}, so send the message to ${po.supplier} yourself (WhatsApp/phone) and mark it sent`;
       }
+    } else if (a.type === "payroll_run") {
+      result = executePayrollRun(db, a.payload.runId);
     } else {
       throw new Error(`No executor for action type "${a.type}"`);
     }

@@ -3,6 +3,8 @@
  */
 import { config } from "../config.js";
 import { poNumber, type CreatedOrder } from "../domain/purchasing.js";
+import { DAY_NAMES, type PayrollRunView, type WeekRota } from "../domain/staff.js";
+import { dayOfWeek } from "../domain/periods.js";
 import type { DB } from "../db/index.js";
 import { runOrchestrator } from "../agents/orchestrator.js";
 import { notifyOwners } from "../integrations/notify.js";
@@ -90,5 +92,35 @@ export async function notifyApprovalsNeeded(db: DB, created: CreatedOrder[], opt
   };
   const subjectFor = (l: Locale) =>
     l === "ar" ? `🧾 الليوان · ${created.length} طلب شراء بانتظار الموافقة · AED ${(total / 100).toFixed(0)}` : `🧾 The Liwan · ${created.length} purchase order(s) to approve · AED ${(total / 100).toFixed(0)}`;
+  return notifyOwners(db, { textFor, subjectFor, link }, opts.notifier);
+}
+
+// ------------------------------------------------------------------ staff (Phase 3)
+
+export async function notifyPayrollNeeded(db: DB, run: PayrollRunView, reminder = false, opts: { notifier?: Notifier | Notifier[] } = {}) {
+  const link = `${config.dashboardUrl}/approvals`;
+  const aed = (f: number) => `AED ${(f / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const textFor = (l: Locale) => {
+    const head = l === "ar"
+      ? `💼 الليوان — ${reminder ? "تذكير: " : ""}رواتب ${run.periodStart} → ${run.periodEnd} بانتظار الموافقة`
+      : `💼 The Liwan — ${reminder ? "reminder: " : ""}payroll ${run.periodStart} → ${run.periodEnd} waiting for approval`;
+    const rows = run.lines.map((x) => `• ${x.name}: ${aed(x.netFils)}${x.notes.length ? ` (${x.notes.join("; ")})` : ""}`);
+    const foot = l === "ar"
+      ? `الإجمالي ${aed(run.netFils)} · موعد الدفع ${run.payDate}. تكفي موافقة شريك واحد؛ لن تُحوّل أي أموال تلقائياً.\n${link}`
+      : `Total ${aed(run.netFils)} · pay date ${run.payDate}. Any one owner can approve; no money moves automatically.\n${link}`;
+    return [head, "", ...rows, "", foot].join("\n");
+  };
+  const subjectFor = (l: Locale) => (l === "ar" ? `💼 الليوان · رواتب ${run.payDate} بانتظار الموافقة · ${aed(run.netFils)}` : `💼 The Liwan · ${reminder ? "Reminder: " : ""}payroll for ${run.payDate} to approve · ${aed(run.netFils)}`);
+  return notifyOwners(db, { textFor, subjectFor, link }, opts.notifier);
+}
+
+export async function notifyRotaGaps(db: DB, rota: WeekRota, opts: { notifier?: Notifier | Notifier[] } = {}) {
+  if (!rota.gaps.length) return { sent: 0, failed: 0, skipped: [] as string[] };
+  const link = `${config.dashboardUrl}/staff?week=${rota.weekStart}`;
+  const rows = rota.gaps.map((g) => `• ${DAY_NAMES[dayOfWeek(g.date)]} ${g.date}: ${g.label} ${g.start}–${g.end}`);
+  const textFor = (l: Locale) =>
+    [l === "ar" ? `🗓 الليوان — مناوبات غير مغطاة في أسبوع ${rota.weekStart}` : `🗓 The Liwan — uncovered shifts, week of ${rota.weekStart}`, "", ...rows, "",
+      l === "ar" ? `يحتاج أحد الشركاء أو موظف بدوام جزئي لتغطيتها.\n${link}` : `An owner or a part-timer needs to cover these.\n${link}`].join("\n");
+  const subjectFor = (l: Locale) => (l === "ar" ? `🗓 الليوان · ${rota.gaps.length} مناوبة غير مغطاة` : `🗓 The Liwan · ${rota.gaps.length} uncovered shift(s) next week`);
   return notifyOwners(db, { textFor, subjectFor, link }, opts.notifier);
 }

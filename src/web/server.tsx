@@ -13,6 +13,9 @@ import { stockStatus, expiryAlerts, shortfalls, type StockRow } from "../domain/
 import { cashForecast, pnlBusinessMonthToDate, pnlRange, vatPosition } from "../domain/finance.js";
 import { ApprovalError, approveAndExecute, decideAction, getAction, listActions, markPurchaseOrderSent, pendingCount, receivePurchaseOrder, type SupplierSender } from "../domain/approvals.js";
 import { getPurchaseOrder, listPurchaseOrders, poNumber } from "../domain/purchasing.js";
+import { assignShift, DAY_NAMES, freeStaff, payrollRunIsStale, generateWeekRota, getPayrollRun, hoursSummary, listPayrollRuns, listStaff, markPayrollPaid, payrollPeriod, preparePayrollRun, previewPayroll, updateShift, weekRota, weekStartOf } from "../domain/staff.js";
+import { dayOfWeek } from "../domain/periods.js";
+import { readFileSync, existsSync } from "node:fs";
 import { formatAed } from "../domain/money.js";
 import { addDays, todayInDubai } from "../domain/periods.js";
 import { buildDailyReport } from "../reports/reports.js";
@@ -290,9 +293,20 @@ export function createApp(db: DB, deps: { supplierSender?: SupplierSender } = {}
         {pending.length === 0 && <div class="card">{t.nothingPending}</div>}
         {pending.map((a) => {
           const po = a.type === "send_purchase_order" ? getPurchaseOrder(db, a.payload.poId) : null;
+          const run = a.type === "payroll_run" ? getPayrollRun(db, a.payload.runId) : null;
           return (
             <div class="card">
-              <h2>{po ? `${po.number} · ${po.supplier}` : a.summary}</h2>
+              <h2>{po ? `${po.number} · ${po.supplier}` : run ? `💼 ${run.number} · ${t.payDate} ${run.payDate}` : a.summary}</h2>
+              {run && (
+                <table><tbody>
+                  {run.lines.map((l) => <tr><td>{l.name}{l.notes.length > 0 && <div class="meta">{l.notes.join("; ")}</div>}</td><td class="n">{money(l.netFils)}</td></tr>)}
+                  <tr><td><b>{t.netPay}</b></td><td class="n"><b>{money(run.netFils)}</b></td></tr>
+                </tbody></table>
+              )}
+              {run && <div class="meta">{`${run.periodStart} → ${run.periodEnd}. ${t.rosteredNote}`}</div>}
+              {run && payrollRunIsStale(db, run) && (
+                <form method="post" action="/payroll/prepare" class="warn">⚠ {t.payrollStale} <button type="submit" class="small">{t.recalculate}</button></form>
+              )}
               {po && (
                 <table><tbody>
                   {po.lines.map((l) => <tr><td>{`${l.packs} × ${l.packDescription}`}<div class="meta">{l.reason}</div></td><td class="n">{money(l.packs * l.priceFils)}</td></tr>)}
@@ -421,6 +435,169 @@ export function createApp(db: DB, deps: { supplierSender?: SupplierSender } = {}
         </div>
       </Page>,
     );
+  });
+
+  // ------------------------------------------------------------- Staff
+  app.get("/staff", (c) => {
+    const lang = c.get("lang");
+    const t = L[lang];
+    const ws = weekStartOf(isDate(c.req.query("week")) ? c.req.query("week")! : todayInDubai());
+    const staff = listStaff(db);
+    const r = weekRota(db, ws);
+    const period = payrollPeriod(db, todayInDubai());
+    const hours = hoursSummary(db, period.start, todayInDubai());
+    const preview = staff.length ? previewPayroll(db, period) : [];
+    const runs = listPayrollRuns(db, 6);
+    const err = c.req.query("error");
+    const dayName = (d: string) => (lang === "ar" ? new Intl.DateTimeFormat("ar-AE", { weekday: "short", timeZone: "UTC" }).format(new Date(`${d}T00:00:00Z`)) : DAY_NAMES[dayOfWeek(d)].slice(0, 3));
+    const STATUSES = ["planned", "worked", "absent", "sick", "leave"] as const;
+    return c.html(
+      <Page title={t.staff} lang={lang} active="staff" owner={c.get("ownerName")} pending={c.get("pending")}>
+        <h1>{`${t.rota} · ${r.weekStart} → ${r.weekEnd}`}</h1>
+        {err && <div class="card err">{err}</div>}
+        {!staff.length && <div class="card">{t.noStaff}</div>}
+        <div class="datepick">
+          <a href={`/staff?week=${addDays(ws, -7)}`}>{t.prevWeek}</a>
+          <a href={`/staff?week=${addDays(ws, 7)}`}>{t.nextWeek}</a>
+          {staff.length > 0 && <form method="post" action={`/rota/generate?week=${ws}`} style="margin-inline-start:auto"><button type="submit" class="small">{t.fillRota}</button></form>}
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr><th>{t.day}</th>{r.templates.map((tp) => <th style="white-space:normal">{tp.label}<br />{`${tp.start}–${tp.end}`}</th>)}</tr></thead>
+            <tbody>{Array.from({ length: 7 }, (_, i) => addDays(ws, i)).map((d) => (
+              <tr>
+                <td>{`${dayName(d)} ${d.slice(5)}`}</td>
+                {r.templates.map((tp) => {
+                  const here = r.shifts.filter((x) => x.date === d && x.template === tp.code);
+                  const gap = r.gaps.some((g) => g.date === d && g.template === tp.code);
+                  return (
+                    <td style="white-space:normal">
+                      {here.map((x) => (
+                        <form method="post" action={`/shifts/${x.id}?week=${ws}`} class="inline" style="margin-bottom:4px">
+                          <span>{x.staffName}</span>
+                          <select name="status" class="inline" aria-label={`${x.staffName} ${t.status}`} onchange="this.form.submit()">
+                            {STATUSES.map((st) => <option value={st} selected={x.status === st}>{st}</option>)}
+                          </select>
+                          <noscript><button type="submit" class="small secondary">{t.save}</button></noscript>
+                        </form>
+                      ))}
+                      {gap && (() => {
+                        const free = freeStaff(db, d);
+                        return (
+                          <form method="post" action={`/shifts/assign?week=${ws}`} class="inline">
+                            <span class="badge b-out">{t.uncoveredShift}</span>
+                            <input type="hidden" name="date" value={d} /><input type="hidden" name="template" value={tp.code} />
+                            {free.length > 0
+                              ? (<><select name="staffId" class="inline" aria-label={t.assign}>{free.map((st) => <option value={String(st.id)}>{st.name}</option>)}</select>
+                                  <button type="submit" class="small">{t.assign}</button></>)
+                              : <span class="meta">{t.nobodyFree}</span>}
+                          </form>
+                        );
+                      })()}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}</tbody>
+          </table>
+          {r.warnings.length > 0 && <ul class="meta">{r.warnings.map((w) => <li class="warn">⚠ {w.message}</li>)}</ul>}
+        </div>
+
+        {staff.length > 0 && (
+          <div class="card">
+            <h2>{`${t.hoursMonth} · ${period.start} →`}</h2>
+            <table>
+              <thead><tr><th></th><th class="n">{t.shifts}</th><th class="n">{t.hours}</th><th class="n">{t.overtime}</th><th class="n">{t.absences}</th></tr></thead>
+              <tbody>{hours.map((h) => <tr><td>{h.name}</td><td class="n">{h.shifts}</td><td class="n">{h.hours}</td><td class="n">{h.overtimeHours}</td><td class="n">{`${h.absent} / ${h.sick}`}</td></tr>)}</tbody>
+            </table>
+          </div>
+        )}
+
+        {staff.length > 0 && (
+          <div class="card">
+            <h2>{`${t.payroll} · ${period.start} → ${period.end} · ${t.payDate} ${period.payDate}`}</h2>
+            <table>
+              <thead><tr><th></th><th class="n wide">{t.basicAllow}</th><th class="n wide">{t.overtime}</th><th class="n wide">{t.deductions}</th><th class="n">{t.netPay}</th></tr></thead>
+              <tbody>
+                {preview.map((l) => (
+                  <tr>
+                    <td>{l.name}{l.notes.length > 0 && <div class="meta">{l.notes.join("; ")}</div>}</td>
+                    <td class="n wide">{formatAed(l.basicFils + l.allowancesFils)}</td><td class="n wide">{formatAed(l.overtimeFils)}</td>
+                    <td class="n wide">{formatAed(l.absenceFils - Math.min(0, l.adjustmentsFils))}</td><td class="n"><b>{formatAed(l.netFils)}</b></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p class="meta">{t.rosteredNote}</p>
+            <form method="post" action="/payroll/prepare"><button type="submit">{runs.some((x) => x.status === "pending_approval" && x.periodStart === period.start) ? t.updatePayroll : t.preparePayroll}</button></form>
+          </div>
+        )}
+
+        {runs.length > 0 && (
+          <div class="card">
+            <h2>{t.runs}</h2>
+            <ul class="alerts">{runs.map((run) => (
+              <li>
+                <b>{run.number}</b>{` · ${run.status} · ${formatAed(run.netFils)} · ${t.payDate} ${run.payDate}`}
+                <div class="actions">
+                  {run.sheetPath && <a href={`/payroll/${run.id}/sheet`}>{t.sheet} (CSV)</a>}
+                  {run.status === "approved" && <form method="post" action={`/payroll/${run.id}/paid`}><button type="submit" class="small">{t.markPaid}</button></form>}
+                </div>
+              </li>
+            ))}</ul>
+          </div>
+        )}
+      </Page>,
+    );
+  });
+
+  const staffFail = (c: any, e: unknown, week?: string) => c.redirect(`/staff?${week ? `week=${week}&` : ""}error=${encodeURIComponent((e as Error).message)}`);
+
+  app.post("/rota/generate", (c) => {
+    const week = c.req.query("week");
+    try { generateWeekRota(db, weekStartOf(isDate(week) ? week! : todayInDubai())); } catch (e) { return staffFail(c, e, week); }
+    return c.redirect(`/staff?week=${week ?? ""}`);
+  });
+
+  app.post("/shifts/assign", async (c) => {
+    const week = c.req.query("week");
+    const b = await c.req.parseBody();
+    try { assignShift(db, String(b.date), String(b.template), Number(b.staffId)); } catch (e) { return staffFail(c, e, week); }
+    return c.redirect(`/staff?week=${week ?? ""}`);
+  });
+
+  app.post("/shifts/:id", async (c) => {
+    const week = c.req.query("week");
+    const b = await c.req.parseBody();
+    const status = String(b.status);
+    if (!["planned", "worked", "absent", "sick", "leave"].includes(status)) return staffFail(c, new Error("Unknown status"), week);
+    try { updateShift(db, Number(c.req.param("id")), { status: status as any }); } catch (e) { return staffFail(c, e, week); }
+    return c.redirect(`/staff?week=${week ?? ""}`);
+  });
+
+  app.post("/payroll/prepare", async (c) => {
+    try {
+      const { run, created } = preparePayrollRun(db, todayInDubai(), `owner:${c.get("ownerName")}`);
+      if (created) {
+        const { notifyPayrollNeeded } = await import("../reports/summary.js");
+        await notifyPayrollNeeded(db, run);
+      }
+      return c.redirect(run.actionId ? `/approvals` : "/staff");
+    } catch (e) { return staffFail(c, e); }
+  });
+
+  app.post("/payroll/:id/paid", (c) => {
+    try { markPayrollPaid(db, Number(c.req.param("id"))); } catch (e) { return staffFail(c, e); }
+    return c.redirect("/staff");
+  });
+
+  app.get("/payroll/:id/sheet", (c) => {
+    const run = getPayrollRun(db, Number(c.req.param("id")));
+    if (!run?.sheetPath || !existsSync(run.sheetPath)) return c.text("No payment sheet for this run.", 404);
+    c.header("Content-Type", "text/csv; charset=utf-8");
+    c.header("Content-Disposition", `attachment; filename="${run.number}.csv"`);
+    c.header("Cache-Control", "no-store");
+    return c.body(readFileSync(run.sheetPath, "utf8"));
   });
 
   return app;

@@ -4,6 +4,7 @@ import { getNumberSetting, getSetting } from "../db/index.js";
 import { computePayback, type PaybackStatus } from "./payback.js";
 import { addDays, businessMonth, daysBetweenInclusive, type ISODate } from "./periods.js";
 import { forecastCash, vatQuarter, type ForecastWeek } from "./cashflow.js";
+import { gratuityMonthlyAccrual } from "./payroll.js";
 import { computeDailyPnl, sumPnl, type DailyPnl, type FixedCost, type OneOffCost, type PnlConfig, type PnlTotals } from "./pnl.js";
 import { dailySales } from "./sales.js";
 
@@ -15,12 +16,26 @@ export function pnlConfig(db: DB): PnlConfig {
   };
 }
 
+/**
+ * Costs for the P&L. Once staff are on record, their monthly packages (+ an end-of-service gratuity accrual)
+ * replace the placeholder "payroll" fixed cost, so salaries aren't counted twice. Overtime, unpaid absence and
+ * adjustments arrive as one-off payroll costs when a payroll run is approved.
+ */
 export function loadCosts(db: DB): { fixed: FixedCost[]; oneOffs: OneOffCost[] } {
   const rows = db.prepare("SELECT name, category, kind, amount_fils, start_date, end_date FROM expenses").all() as any[];
+  const staff = db.prepare("SELECT name, basic_fils, housing_fils, transport_fils, other_fils, start_date, end_date FROM staff").all() as any[];
+  const gratuityDays = getNumberSetting(db, "gratuity_days_per_year");
+  const staffCosts: FixedCost[] = staff.flatMap((s) => [
+    { name: `${s.name} salary & allowances`, category: "payroll", monthlyFils: s.basic_fils + s.housing_fils + s.transport_fils + s.other_fils, startDate: s.start_date, endDate: s.end_date },
+    { name: `${s.name} end-of-service accrual (est.)`, category: "payroll", monthlyFils: gratuityMonthlyAccrual(s.basic_fils, gratuityDays), startDate: s.start_date, endDate: s.end_date },
+  ]);
   return {
-    fixed: rows
-      .filter((r) => r.kind === "fixed_monthly")
-      .map((r) => ({ name: r.name, category: r.category, monthlyFils: r.amount_fils, startDate: r.start_date, endDate: r.end_date })),
+    fixed: [
+      ...rows
+        .filter((r) => r.kind === "fixed_monthly" && !(staff.length > 0 && r.category === "payroll"))
+        .map((r) => ({ name: r.name, category: r.category, monthlyFils: r.amount_fils, startDate: r.start_date, endDate: r.end_date })),
+      ...staffCosts,
+    ],
     oneOffs: rows
       .filter((r) => r.kind === "one_off")
       .map((r) => ({ name: r.name, category: r.category, amountFils: r.amount_fils, date: r.start_date })),

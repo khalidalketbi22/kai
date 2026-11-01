@@ -14,6 +14,8 @@ import { recordCount } from "./domain/inventory.js";
 import { EmailNotifier } from "./integrations/notifiers/email.js";
 import { seedReferenceData } from "./seed/seed.js";
 import { setOwnerPin } from "./web/auth.js";
+import { addStaff, generateWeekRota, listStaff, parseRestDay, weekStartOf } from "./domain/staff.js";
+import { todayInDubai } from "./domain/periods.js";
 
 /** Merge key/values into a .env file's text, keeping comments, order and unrelated keys. */
 export function mergeEnv(existing: string, values: Record<string, string>): string {
@@ -140,6 +142,38 @@ export async function runSetup(envPath = ".env"): Promise<void> {
     for (const sp of db.prepare("SELECT id, name, email FROM suppliers ORDER BY name").all() as any[]) {
       const e = await p.ask(`  ${sp.name} orders email`, sp.email ?? "", (v) => (v === "" || isEmail(v) ? null : "Not a valid email"));
       db.prepare("UPDATE suppliers SET email = ? WHERE id = ?").run(e || null, sp.id);
+    }
+    console.log("");
+
+    // ---------------------------------------------------------------- staff
+    const haveStaff = listStaff(db).length;
+    if (await p.yes(`Add staff now${haveStaff ? ` (${haveStaff} on record)` : ""}? Needed for the rota and payroll.`, haveStaff === 0)) {
+      const dateOk = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? null : "Use YYYY-MM-DD");
+      const aedOk = (v: string) => (v === "" || Number(v) >= 0 ? null : "A number in AED");
+      for (;;) {
+        console.log("");
+        const name = await p.ask("  Staff name (Enter when done)");
+        if (!name) break;
+        if (listStaff(db).some((x) => x.name.toLowerCase() === name.toLowerCase())) { console.log("  ✗ Already on record"); continue; }
+        const role = await p.ask("  Role", "barista");
+        const basic = await p.ask("  Monthly basic salary, AED", "", (v) => (Number(v) > 0 ? null : "Required"));
+        const housing = await p.ask("  Housing allowance, AED/month", "0", aedOk);
+        const transport = await p.ask("  Transport allowance, AED/month", "0", aedOk);
+        const other = await p.ask("  Other allowances, AED/month", "0", aedOk);
+        const rest = await p.ask("  Weekly rest day", "Friday", (v) => { try { parseRestDay(v); return null; } catch (e) { return (e as Error).message; } });
+        const maxH = await p.ask("  Max hours per week", role.toLowerCase().includes("part") ? "24" : "48", (v) => (Number(v) > 0 ? null : "A number"));
+        const start = await p.ask("  Start date", "2026-10-08", dateOk);
+        const iban = await p.ask("  IBAN for salary (Enter to skip)", "");
+        const fils = (v: string) => Math.round(Number(v || 0) * 100);
+        addStaff(db, { name, role, basicFils: fils(basic), housingFils: fils(housing), transportFils: fils(transport), otherFils: fils(other),
+          restDay: parseRestDay(rest), maxWeeklyHours: Number(maxH), startDate: start, iban: iban || null });
+        console.log(`  ✓ ${name} added`);
+      }
+      if (listStaff(db).length) {
+        const ws = weekStartOf(todayInDubai());
+        const r = generateWeekRota(db, ws);
+        console.log(`✓ Rota for the week of ${ws}: ${r.created} shift(s)${r.gaps.length ? `, ${r.gaps.length} uncovered — see the Staff page` : ", all covered"}.`);
+      }
     }
     console.log("");
 

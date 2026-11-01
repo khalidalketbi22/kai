@@ -46,7 +46,7 @@ Liwan tools and delegate to each other.
 | Sales analyst | 1 | sales summary, item performance, peak hours, margins |
 | Purchasing | 2 ✓ | purchase plan, `propose_purchase_orders` (drafts only, wait for approval), pending approvals, orders |
 | Finance | 2 ✓ | P&L, VAT quarter position, 13-week cash-flow forecast, payback |
-| Staff | 3 | rota, hours, payroll prep for the 8th (payroll run = approval action) |
+| Staff | 3 ✓ | staff, rota, rota plan (dry run), hours, payroll preview, `propose_payroll_run` (draft only, waits for approval) — no IBANs or IDs exposed |
 | Customer/marketing | 4 | reviews, bilingual Instagram ideas tied to slow sellers, posting needs approval |
 
 ## Stock model
@@ -68,6 +68,16 @@ Liwan tools and delegate to each other.
 - **Minimum order:** if a supplier's order is below its minimum, other items from that supplier that are below
   par are topped up. If it's still below, the order is flagged for the owners to decide.
 - **No duplicates:** items already on an open order are skipped.
+
+## Staff model
+
+- **Rota:** `src/domain/rota.ts`, all pure. Each day's templates are filled closing shift first, by the eligible
+  person with the fewest hours that week. Eligible means employed that day, not on their rest day, not already on a
+  shift that day, and under their weekly cap. Whatever is left is a gap.
+- **Payroll:** `src/domain/payroll.ts`, also pure. The hourly basic wage is basic × 12 / 365 / 8.
+- **Every rate is a setting** (`max_daily_hours`, `overtime_premium`, `night_overtime_premium`, `payroll_day_divisor`,
+  `gratuity_days_per_year`, `shift_templates`). They follow common UAE practice; confirm with your accountant or PRO.
+- **Not covered yet:** sick-leave pay tiers and annual-leave accrual. Those days are recorded and paid in full.
 
 ## Money model
 
@@ -92,7 +102,19 @@ Liwan tools and delegate to each other.
    - Finance agent, VAT quarter position, 13-week cash-flow forecast.
    - The Sunday report adds VAT, the cash outlook and pending approvals.
    - Later: approval by WhatsApp buttons, once WhatsApp is set up.
-3. **Staff:** rota, timesheets, payroll prep for the 8th.
+3. **Done: staff.**
+   - Staff packages, a Monday–Sunday rota auto-filled from opening and closing shift templates.
+   - The rota respects rest days and weekly caps, never double-books, and flags gaps.
+   - Shift status: worked, absent, sick or leave.
+   - Payroll for the 8th:
+     - prorating for joiners and leavers
+     - daily overtime at +25%, and +50% between 22:00 and 04:00
+     - unpaid absence at (basic + allowances) / 30
+     - adjustments (bonuses, deductions)
+   - Payroll is an approval action. The executor writes the payment sheet; an owner marks it paid.
+   - A pending run is recalculated in place when inputs change.
+   - The P&L swaps the placeholder salary line for real packages plus an end-of-service gratuity accrual
+     (21 days' basic a year). Variable pay is booked when payroll is approved.
 4. **Customer/marketing:** Google Business Profile reviews, Instagram ideas for slow sellers.
 5. **Live connections:**
    - Foodics API/webhooks as a `SalesSource`, VaultsPay settlements as a `PaymentsSource` for card reconciliation.

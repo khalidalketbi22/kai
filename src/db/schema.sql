@@ -255,3 +255,78 @@ CREATE TABLE IF NOT EXISTS notifications (
   error      TEXT,
   sent_at    TEXT NOT NULL
 );
+
+-- ---- Staff, rota and payroll (Phase 3) ----
+CREATE TABLE IF NOT EXISTS staff (
+  id                    INTEGER PRIMARY KEY,
+  name                  TEXT NOT NULL UNIQUE,
+  role                  TEXT NOT NULL DEFAULT 'barista',
+  phone                 TEXT,
+  email                 TEXT,
+  basic_fils            INTEGER NOT NULL,          -- monthly basic salary (drives overtime + gratuity)
+  housing_fils          INTEGER NOT NULL DEFAULT 0,
+  transport_fils        INTEGER NOT NULL DEFAULT 0,
+  other_fils            INTEGER NOT NULL DEFAULT 0, -- other monthly allowances
+  rest_day              INTEGER NOT NULL DEFAULT 5, -- 0 = Sunday … 6 = Saturday
+  max_weekly_hours      REAL NOT NULL DEFAULT 48,
+  start_date            TEXT NOT NULL,
+  end_date              TEXT,                      -- last working day; NULL = current
+  iban                  TEXT,
+  personal_id           TEXT                       -- Emirates ID / labour card no., for the WPS file
+);
+
+-- One row per person per shift. Planned shifts in the past count as worked unless marked otherwise.
+CREATE TABLE IF NOT EXISTS shifts (
+  id             INTEGER PRIMARY KEY,
+  staff_id       INTEGER NOT NULL REFERENCES staff(id),
+  date           TEXT NOT NULL,
+  template       TEXT NOT NULL,              -- open | close | custom
+  start_time     TEXT NOT NULL,              -- HH:MM
+  end_time       TEXT NOT NULL,              -- HH:MM (may be past midnight, e.g. 02:00)
+  break_minutes  INTEGER NOT NULL DEFAULT 60,
+  status         TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','worked','absent','sick','leave')),
+  actual_start   TEXT,
+  actual_end     TEXT,
+  note           TEXT,
+  UNIQUE (staff_id, date, template)
+);
+CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
+
+CREATE TABLE IF NOT EXISTS payroll_adjustments (
+  id            INTEGER PRIMARY KEY,
+  staff_id      INTEGER NOT NULL REFERENCES staff(id),
+  period_start  TEXT NOT NULL,               -- business month it applies to
+  amount_fils   INTEGER NOT NULL,            -- + bonus / − advance recovery or deduction
+  note          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS payroll_runs (
+  id            INTEGER PRIMARY KEY,
+  period_start  TEXT NOT NULL,
+  period_end    TEXT NOT NULL,
+  pay_date      TEXT NOT NULL,
+  status        TEXT NOT NULL CHECK (status IN ('pending_approval','approved','paid','cancelled')),
+  gross_fils    INTEGER NOT NULL,
+  net_fils      INTEGER NOT NULL,
+  created_at    TEXT NOT NULL,
+  created_by    TEXT NOT NULL,
+  action_id     INTEGER REFERENCES actions(id),
+  sheet_path    TEXT,
+  paid_at       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS payroll_lines (
+  id                INTEGER PRIMARY KEY,
+  run_id            INTEGER NOT NULL REFERENCES payroll_runs(id),
+  staff_id          INTEGER NOT NULL REFERENCES staff(id),
+  days_employed     INTEGER NOT NULL,
+  basic_fils        INTEGER NOT NULL,
+  allowances_fils   INTEGER NOT NULL,
+  overtime_hours    REAL NOT NULL,
+  overtime_fils     INTEGER NOT NULL,
+  absence_days      INTEGER NOT NULL,
+  absence_fils      INTEGER NOT NULL,      -- deducted (positive number)
+  adjustments_fils  INTEGER NOT NULL,
+  net_fils          INTEGER NOT NULL,
+  notes             TEXT
+);

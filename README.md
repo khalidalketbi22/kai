@@ -13,7 +13,17 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the phase pl
 <img src="docs/screenshots/stock.png" width="220" alt="Stock page">
 </p>
 
-## Quick start
+## Install for real (computer at the café or at home)
+
+```bash
+npm install
+npm run setup      # owners, emails, language, PINs, email account, opening stock → sends a test email
+npm start          # dashboard + 21:00 daily / Sunday weekly reports
+```
+
+Full guide, including auto-start, phone access and backups: [docs/run-on-a-computer.md](docs/run-on-a-computer.md).
+
+## Try the demo (simulated October sales)
 
 ```bash
 npm install
@@ -22,7 +32,7 @@ npm run seed                    # menu, recipes, suppliers, owners + simulated t
 npm run liwan -- import samples/foodics-2026-11-01.csv   # a day of Foodics sales → stock depletes
 npm run liwan -- summary        # tonight's daily summary (add --lang ar for Arabic)
 npm run liwan -- pnl            # business-month-to-date P&L
-npm test                        # 82 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
+npm test                        # 85 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
 ```
 
 Dashboard (phone-friendly, EN/AR):
@@ -44,7 +54,8 @@ npm run liwan -- summary --send          # daily summary + agent insights → ow
 
 | Command | What it does |
 |---|---|
-| `seed [--reset]` | Create the database with reference data and simulated history, and write a sample CSV |
+| `setup` | Guided first-time setup on the computer that runs it |
+| `seed [--reset] [--empty]` | Demo database with simulated history (or `--empty`: menu/recipes/suppliers only) |
 | `import <file.csv>` | Import a Foodics order-items export. Re-importing the same file is refused, and orders already on record are skipped |
 | `stock` | Stock on hand, reorder points, days of cover, expiry |
 | `sales [--from --to]` | Sales, best/worst sellers, margin per item, orders by hour |

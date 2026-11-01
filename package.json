@@ -2,12 +2,14 @@
   "name": "liwan-ops",
   "version": "0.1.0",
   "private": true,
-  "description": "The Liwan Coffee — multi-agent operations system (inventory, sales, purchasing, finance, staff, marketing)",
+  "description": "The Liwan Coffee \u2014 multi-agent operations system (inventory, sales, purchasing, finance, staff, marketing)",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
+    "setup": "tsx src/cli.ts setup",
+    "start": "tsx src/cli.ts serve",
     "liwan": "tsx src/cli.ts",
     "seed": "tsx src/cli.ts seed",
     "dev": "tsx src/cli.ts serve",

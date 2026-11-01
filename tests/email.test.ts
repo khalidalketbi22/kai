@@ -66,3 +66,16 @@ describe("notifyOwners", () => {
     expect((db.prepare("SELECT error FROM notifications LIMIT 1").get() as any).error).toBe("boom");
   });
 });
+
+describe("setup .env merge", async () => {
+  const { mergeEnv, isEmail } = await import("../src/setup.js");
+  it("updates existing keys in place, keeps comments/other keys, appends new ones, quotes when needed", () => {
+    const out = mergeEnv("# Liwan\nPORT=8787\nSMTP_USER=old@x.com\n", { SMTP_USER: "new@x.com", EMAIL_FROM: "The Liwan <new@x.com>" });
+    expect(out).toBe('# Liwan\nPORT=8787\nSMTP_USER=new@x.com\nEMAIL_FROM="The Liwan <new@x.com>"\n');
+  });
+  it("works on an empty file", () => expect(mergeEnv("", { A: "1" })).toBe("A=1\n"));
+  it("validates emails", () => {
+    expect(isEmail("khalid@example.com")).toBe(true);
+    expect(isEmail("not-an-email")).toBe(false);
+  });
+});

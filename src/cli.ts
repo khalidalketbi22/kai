@@ -23,9 +23,10 @@ import { setOwnerPin } from "./web/auth.js";
 
 const HELP = `The Liwan Ops
 
-  seed [--reset] [--through 2026-10-31] [--sample-date 2026-11-01]
-        Create the database with menu, recipes, suppliers, owners and a simulated trading history,
-        and write a Foodics sample CSV for the next day to samples/.
+  setup                              Guided first-time setup: owners, emails, PINs, email account, opening stock.
+  seed [--reset] [--empty] [--through 2026-10-31] [--sample-date 2026-11-01]
+        Demo database with a simulated trading history (or --empty: menu/recipes/suppliers only),
+        and a Foodics sample CSV for the next day in samples/.
   import <file.csv>                  Import a Foodics order-items CSV (idempotent) and deplete stock.
   stock [--date D]                   Stock levels, days of cover and alerts.
   sales [--from D --to D]            Sales summary, best/worst sellers, peak hours (default: last 7 days).
@@ -47,7 +48,7 @@ Ingredient codes: run "stock" to list them. Dates: YYYY-MM-DD.`;
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
-    reset: { type: "boolean" }, through: { type: "string" }, "sample-date": { type: "string" },
+    reset: { type: "boolean" }, empty: { type: "boolean" }, through: { type: "string" }, "sample-date": { type: "string" },
     date: { type: "string" }, from: { type: "string" }, to: { type: "string" },
     weekly: { type: "boolean" }, send: { type: "boolean" }, "no-agent": { type: "boolean" }, lang: { type: "string" },
     verbose: { type: "boolean" }, reason: { type: "string" }, note: { type: "string" },
@@ -65,14 +66,17 @@ const nowIso = () => new Date().toISOString().slice(0, 19);
 async function main() {
   if (!cmd || values.help) return console.log(HELP);
 
+  if (cmd === "setup") return (await import("./setup.js")).runSetup();
+
   if (cmd === "seed") {
     if (existsSync(config.dbPath)) {
       if (!values.reset) throw new Error(`${config.dbPath} already exists. Use --reset to wipe and re-seed.`);
       for (const suffix of ["", "-wal", "-shm"]) rmSync(config.dbPath + suffix, { force: true });
     }
     const db = openDb(config.dbPath);
-    const through = values.through ?? "2026-10-31";
     seedReferenceData(db);
+    if (values.empty) return console.log(`Created ${config.dbPath} with menu, recipes and suppliers (no sales). Record opening stock with: count <ingredient> <qty>`);
+    const through = values.through ?? "2026-10-31";
     const sim = simulateHistory(db, "2026-10-08", through);
     const sampleDate = values["sample-date"] ?? addDays(through, 1);
     mkdirSync("samples", { recursive: true });

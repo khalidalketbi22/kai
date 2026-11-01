@@ -2,6 +2,7 @@
  * Daily (21:00) and weekly (Sunday) summaries: deterministic report + optional agent insights → owners.
  */
 import { config } from "../config.js";
+import { poNumber, type CreatedOrder } from "../domain/purchasing.js";
 import type { DB } from "../db/index.js";
 import { runOrchestrator } from "../agents/orchestrator.js";
 import { notifyOwners } from "../integrations/notify.js";
@@ -65,4 +66,29 @@ export async function sendWeeklyReport(db: DB, endDate: string, opts: { agent?: 
   const subjectFor = (l: Locale) => `📊 ${l === "ar" ? "الليوان · التقرير الأسبوعي" : "The Liwan · Weekly report"} ${report.from} → ${report.to}`;
   const res = await notifyOwners(db, { textFor, subjectFor, link: `${config.dashboardUrl}/sales?to=${report.to}`, template: { name: config.whatsapp.weeklyTemplate, params } }, opts.notifier);
   return { report, insights, ...res };
+}
+
+// ------------------------------------------------------------------ approvals (Phase 2)
+
+/** Tell every owner that new purchase orders are waiting for approval (any one owner can approve). */
+export async function notifyApprovalsNeeded(db: DB, created: CreatedOrder[], opts: { notifier?: Notifier | Notifier[] } = {}) {
+  if (!created.length) return { sent: 0, failed: 0, skipped: [] as string[] };
+  const total = created.reduce((s, c) => s + c.order.totalFils + c.order.vatFils, 0);
+  const link = `${config.dashboardUrl}/approvals`;
+  const textFor = (l: Locale) => {
+    const head = l === "ar" ? `🧾 الليوان — طلبات شراء بانتظار الموافقة (${created.length})` : `🧾 The Liwan — purchase orders waiting for approval (${created.length})`;
+    const body = created.map((c) => {
+      const o = c.order;
+      const items = o.lines.map((x) => `${x.packs}× ${x.packDescription}`).join(", ");
+      const min = o.belowMinimum ? (l === "ar" ? " ⚠ أقل من الحد الأدنى للطلب" : " ⚠ below supplier minimum") : "";
+      return `• ${poNumber(c.poId)} · ${o.supplierName}: ${items} — AED ${((o.totalFils + o.vatFils) / 100).toFixed(2)}${min}`;
+    });
+    const foot = l === "ar"
+      ? `يكفي موافقة شريك واحد. لن يُرسل أي طلب للمورد قبل الموافقة.\n${link}`
+      : `Any one owner can approve. Nothing is sent to a supplier until someone does.\n${link}`;
+    return [head, "", ...body, "", foot].join("\n");
+  };
+  const subjectFor = (l: Locale) =>
+    l === "ar" ? `🧾 الليوان · ${created.length} طلب شراء بانتظار الموافقة · AED ${(total / 100).toFixed(0)}` : `🧾 The Liwan · ${created.length} purchase order(s) to approve · AED ${(total / 100).toFixed(0)}`;
+  return notifyOwners(db, { textFor, subjectFor, link }, opts.notifier);
 }

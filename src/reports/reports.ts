@@ -5,7 +5,8 @@ import type { DB } from "../db/index.js";
 import { expiryAlerts, shortfalls, stockStatus, type ExpiryAlert, type StockRow } from "../domain/inventory.js";
 import { formatAed } from "../domain/money.js";
 import { addDays, type ISODate } from "../domain/periods.js";
-import { paybackStatus, pnlBusinessMonthToDate, pnlRange } from "../domain/finance.js";
+import { cashForecast, paybackStatus, pnlBusinessMonthToDate, pnlRange, vatPosition, type CashForecast, type VatPosition } from "../domain/finance.js";
+import { listActions, type ActionView } from "../domain/approvals.js";
 import type { PaybackStatus } from "../domain/payback.js";
 import type { DailyPnl, PnlTotals } from "../domain/pnl.js";
 import { bestAndWorst, peakHours, salesSummary, type HourBucket, type ItemPerformance, type SalesSummary } from "../domain/sales.js";
@@ -24,6 +25,7 @@ export interface DailyReport {
   expiring: ExpiryAlert[];
   shortfalls: { code: string; nameEn: string; nameAr: string; unit: string; qty: number }[];
   payback: PaybackStatus;
+  pendingApprovals: ActionView[];
 }
 
 export function buildDailyReport(db: DB, date: ISODate): DailyReport {
@@ -44,6 +46,7 @@ export function buildDailyReport(db: DB, date: ISODate): DailyReport {
     expiring: expiryAlerts(db, date),
     shortfalls: shortfalls(db, date, date),
     payback: paybackStatus(db, date),
+    pendingApprovals: listActions(db, ["pending_approval"]),
   };
 }
 
@@ -62,6 +65,9 @@ export interface WeeklyReport {
   expiring: ExpiryAlert[];
   shortfalls: { code: string; nameEn: string; nameAr: string; unit: string; qty: number }[];
   payback: PaybackStatus;
+  pendingApprovals: ActionView[];
+  vat: VatPosition;
+  cash: CashForecast;
 }
 
 export function buildWeeklyReport(db: DB, endDate: ISODate): WeeklyReport {
@@ -83,6 +89,9 @@ export function buildWeeklyReport(db: DB, endDate: ISODate): WeeklyReport {
     expiring: expiryAlerts(db, endDate),
     shortfalls: shortfalls(db, from, endDate),
     payback: paybackStatus(db, endDate),
+    pendingApprovals: listActions(db, ["pending_approval"]),
+    vat: vatPosition(db, endDate),
+    cash: cashForecast(db, endDate, 13),
   };
 }
 
@@ -104,6 +113,9 @@ const T = {
     stock: "Stock alerts", low: "low", out: "OUT", cover: "days cover", expiring: "Expiring", expired: "EXPIRED", shortfall: "Sold more than on record (count or delivery missing)",
     payback: "Capital payback", recovered: "recovered", projected: "projected", target: "target", onTrack: "on track", behind: "behind target",
     none: "none", vat: "VAT collected", cogs: "COGS", waste: "Waste & staff drinks",
+    approvals: "Waiting for your approval", approveAt: "Approve or reject in the dashboard", vatQ: "VAT this quarter",
+    netPayable: "net payable", projected2: "projected", due: "due", cash: "Cash outlook (next 4 weeks)", lowest: "Lowest point in 13 weeks",
+    noOpening: "(no opening balance set — shows change from today)",
   },
   ar: {
     daily: "الليوان — الملخص اليومي", weekly: "الليوان — التقرير الأسبوعي", sales: "المبيعات", net: "صافي المبيعات (بدون ضريبة)", orders: "الطلبات",
@@ -112,6 +124,9 @@ const T = {
     stock: "تنبيهات المخزون", low: "منخفض", out: "نفد", cover: "أيام تغطية", expiring: "ينتهي قريباً", expired: "منتهي", shortfall: "مبيعات أكثر من المخزون المسجل (جرد أو توريد ناقص)",
     payback: "استرداد رأس المال", recovered: "مسترد", projected: "المتوقع", target: "الهدف", onTrack: "على المسار", behind: "متأخر عن الهدف",
     none: "لا يوجد", vat: "ضريبة القيمة المضافة المحصلة", cogs: "تكلفة البضاعة", waste: "الهدر ومشروبات الموظفين",
+    approvals: "بانتظار موافقتك", approveAt: "وافق أو ارفض من لوحة التحكم", vatQ: "ضريبة القيمة المضافة هذا الربع",
+    netPayable: "صافي المستحق", projected2: "المتوقع", due: "الاستحقاق", cash: "توقعات النقد (الأسابيع الأربعة القادمة)", lowest: "أدنى رصيد خلال ١٣ أسبوعاً",
+    noOpening: "(لم يُسجل رصيد افتتاحي — الأرقام تمثل التغير من اليوم)",
   },
 } as const;
 
@@ -127,6 +142,12 @@ function stockLines(r: { lowStock: StockRow[]; expiring: ExpiryAlert[]; shortfal
   for (const e of r.expiring) lines.push(`• ${e.expired ? t.expired : t.expiring}: ${stockName(e, l)} ${qtyLabel(e.qtyRemaining, e.unit)} — ${e.expiresAt}`);
   if (r.shortfalls.length) lines.push(`• ${t.shortfall}: ${r.shortfalls.map((s) => `${stockName(s, l)} ${qtyLabel(s.qty, s.unit)}`).join(", ")}`);
   return lines.length ? lines : [`• ${t.none}`];
+}
+
+function approvalLines(list: ActionView[], l: Locale): string[] {
+  if (!list.length) return [];
+  const t = T[l];
+  return ["", `*${t.approvals} (${list.length})*`, ...list.map((a) => `• ${a.summary}`), t.approveAt];
 }
 
 function paybackLine(p: PaybackStatus, l: Locale): string {
@@ -153,6 +174,7 @@ export function renderDailyText(r: DailyReport, l: Locale = "en"): string {
     ``,
     `*${t.stock}*`,
     ...stockLines(r, l),
+    ...approvalLines(r.pendingApprovals, l),
     ``,
     `*${t.payback}*`,
     paybackLine(r.payback, l),
@@ -184,6 +206,14 @@ export function renderWeeklyText(r: WeeklyReport, l: Locale = "en"): string {
     ``,
     `*${t.stock}*`,
     ...stockLines(r, l),
+    ...approvalLines(r.pendingApprovals, l),
+    ``,
+    `*${t.vatQ}* (${r.vat.quarter.start} → ${r.vat.quarter.end})`,
+    `${aed(r.vat.netPayableFils)} ${t.netPayable} · ${t.projected2} ${aed(r.vat.projectedNetPayableFils)} · ${t.due} ${r.vat.quarter.due}`,
+    ``,
+    `*${t.cash}*${r.cash.openingKnown ? "" : ` ${t.noOpening}`}`,
+    ...r.cash.weeks.slice(0, 4).map((w) => `• ${w.weekStart}: ${w.netFils >= 0 ? "+" : ""}${aed(w.netFils)} → ${aed(w.closingFils)}`),
+    `${t.lowest}: ${aed(r.cash.lowestFils)} (${r.cash.lowestWeek})`,
     ``,
     `*${t.payback}*`,
     paybackLine(r.payback, l),

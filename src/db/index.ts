@@ -19,7 +19,34 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   capital_target_fils: "16000000", // 4 owners × AED 40,000
   payback_months: "12",
   expiry_warning_days: "2",
+  vat_quarter_start_month: "1",    // VAT quarters Jan–Mar, Apr–Jun, … (change to match your FTA tax periods)
+  cash_balance_fils: "",           // last known bank + till balance, for the cash-flow forecast
+  cash_balance_date: "",
+  kiosk_address: "The Liwan kiosk, The Arcades, Abu Dhabi",
 };
+
+/**
+ * Columns added after the first release. CREATE TABLE IF NOT EXISTS doesn't alter existing tables,
+ * so databases created by an older version get these added in place (data is kept).
+ */
+const ADDED_COLUMNS: Record<string, Record<string, string>> = {
+  purchase_orders: {
+    vat_fils: "INTEGER NOT NULL DEFAULT 0",
+    message: "TEXT",
+    sent_via: "TEXT",
+    sent_at: "TEXT",
+    expected_at: "TEXT",
+    received_at: "TEXT",
+  },
+  po_lines: { received_packs: "INTEGER", reason: "TEXT" },
+};
+
+function addMissingColumns(db: DB): void {
+  for (const [table, cols] of Object.entries(ADDED_COLUMNS)) {
+    const have = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+    for (const [col, def] of Object.entries(cols)) if (!have.has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+  }
+}
 
 export function openDb(path = process.env.LIWAN_DB ?? "data/liwan.db"): DB {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -32,6 +59,7 @@ export function openDb(path = process.env.LIWAN_DB ?? "data/liwan.db"): DB {
 
 export function migrate(db: DB): void {
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
+  addMissingColumns(db);
   const ins = db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)");
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
 }

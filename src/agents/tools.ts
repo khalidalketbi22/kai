@@ -11,7 +11,9 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { DB } from "../db/index.js";
 import { loadRecipeBook, currentUnitCost, expiryAlerts, shortfalls, stockStatus } from "../domain/inventory.js";
-import { paybackStatus, pnlRange } from "../domain/finance.js";
+import { cashForecast, paybackStatus, pnlRange, vatPosition } from "../domain/finance.js";
+import { listActions } from "../domain/approvals.js";
+import { listPurchaseOrders, planFromDb, proposePurchaseOrders } from "../domain/purchasing.js";
 import { addDays, todayInDubai } from "../domain/periods.js";
 import { itemPerformance, latestBusinessDate, menuMargins, peakHours, salesSummary } from "../domain/sales.js";
 import { buildDailyReport, buildWeeklyReport } from "../reports/reports.js";
@@ -101,6 +103,22 @@ export function toolHandlers(db: DB) {
     get_payback: async (a: { date?: string }) => paybackStatus(db, d(a.date)),
     get_daily_report: async (a: { date?: string }) => buildDailyReport(db, d(a.date)),
     get_weekly_report: async (a: { end_date?: string }) => buildWeeklyReport(db, d(a.end_date)),
+    get_purchase_plan: async (a: { date?: string }) => ({
+      date: d(a.date),
+      note: "Dry run — nothing has been created. Ingredients already on an open order are excluded.",
+      orders: planFromDb(db, d(a.date)),
+    }),
+    propose_purchase_orders: async (a: { date?: string }) => {
+      const created = proposePurchaseOrders(db, d(a.date), "purchasing-agent");
+      return created.length
+        ? { created: created.map((c) => ({ actionId: c.actionId, poId: c.poId, supplier: c.order.supplierName, totalFils: c.order.totalFils, vatFils: c.order.vatFils, belowMinimum: c.order.belowMinimum, lines: c.order.lines.length })),
+            note: "Orders are WAITING FOR AN OWNER'S APPROVAL in the dashboard (Approvals). Nothing has been sent to any supplier." }
+        : { created: [], note: "Nothing needs ordering (or it is already on an open order)." };
+    },
+    get_pending_approvals: async () => ({ pending: listActions(db, ["pending_approval"]) }),
+    get_purchase_orders: async (a: { status?: string }) => ({ orders: listPurchaseOrders(db, a.status ? [a.status] : undefined, 20) }),
+    get_vat_position: async (a: { date?: string }) => vatPosition(db, d(a.date)),
+    get_cash_forecast: async (a: { date?: string; weeks?: number }) => cashForecast(db, d(a.date), a.weeks ?? 13),
   };
 }
 
@@ -135,6 +153,18 @@ export function createLiwanMcpServer(db: DB) {
       tool("get_pnl", "Profit & loss for a date range: net sales, COGS, waste, gross margin, rent (15% from 1 Nov 2026), fixed costs pro-rated over the 8th→7th month, operating profit.", range, wrap(h.get_pnl), ro),
       tool("get_payback", "Progress toward returning the owners' AED 160,000 capital within 12 months: recovered, remaining, run-rate, projected date, on track or not.", { date: DATE.optional() }, wrap(h.get_payback), ro),
       tool("get_daily_report", "Everything for the daily summary in one call: sales vs last week, P&L, month-to-date, best/worst, peak hour, stock alerts, payback.", { date: DATE.optional() }, wrap(h.get_daily_report), ro),
+      tool("get_purchase_plan", "Dry run of what should be ordered now, per supplier: packs, cost, reasons, minimum-order check. Creates nothing.", { date: DATE.optional() }, wrap(h.get_purchase_plan), ro),
+      tool(
+        "propose_purchase_orders",
+        "Create purchase orders for everything that needs reordering, as DRAFTS WAITING FOR OWNER APPROVAL. Does not contact suppliers or spend money. Safe to call again: items already on an open order are skipped.",
+        { date: DATE.optional() },
+        wrap(h.propose_purchase_orders),
+        { annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } },
+      ),
+      tool("get_pending_approvals", "Actions waiting for an owner's approval (purchase orders, later payments).", {}, wrap(h.get_pending_approvals), ro),
+      tool("get_purchase_orders", "Recent purchase orders with lines and status (pending_approval, approved, sent, received, cancelled).", { status: z.string().optional() }, wrap(h.get_purchase_orders), ro),
+      tool("get_vat_position", "UAE VAT for the current quarter: output VAT on sales, input VAT on supplier deliveries, net payable now and projected at quarter end, due date.", { date: DATE.optional() }, wrap(h.get_vat_position), ro),
+      tool("get_cash_forecast", "Week-by-week cash-flow forecast (default 13 weeks): takings, restocking, rent, salaries/fixed costs on the 8th, VAT payments, closing balance, lowest point.", { date: DATE.optional(), weeks: z.number().int().min(1).max(26).optional() }, wrap(h.get_cash_forecast), ro),
       tool("get_weekly_report", "Everything for the weekly report (7 days ending end_date): sales vs previous week, P&L, best/worst, peak hours, stock alerts, payback.", { end_date: DATE.optional() }, wrap(h.get_weekly_report), ro),
     ],
   });

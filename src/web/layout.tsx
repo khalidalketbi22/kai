@@ -5,7 +5,17 @@ export type Lang = "en" | "ar";
 
 export const L = {
   en: {
-    today: "Today", stock: "Stock", sales: "Sales", logout: "Log out", net: "Net sales", orders: "Orders", avgTicket: "Avg ticket",
+    today: "Today", stock: "Stock", sales: "Sales", approvals: "Approvals", finance: "Finance", logout: "Log out",
+    pendingTitle: "Waiting for approval", nothingPending: "Nothing waiting for approval.", approve: "Approve", reject: "Reject",
+    anyOwner: "Any one owner can approve. Approved orders are emailed to the supplier, or prepared for you to send.",
+    belowMin: "Below the supplier's minimum order", awaitingDelivery: "Approved / on the way", markSent: "Mark as sent",
+    markReceived: "Delivery arrived", sendYourself: "Send this to the supplier yourself, then mark it as sent:", history: "Recent decisions",
+    proposedBy: "Proposed by", decidedBy: "by", expected: "expected", inclVat: "incl. VAT", copy: "Message",
+    vatQuarter: "VAT this quarter", outputVat: "Output VAT (sales)", inputVat: "Input VAT (deliveries)", netPayable: "Net payable so far",
+    projectedQ: "Projected at quarter end", dueOn: "Return & payment due", cashForecast: "Cash-flow forecast (13 weeks)",
+    weekOf: "Week of", netCash: "Net cash", takings: "Takings", restock: "Restock", monthly: "Monthly costs", balance: "Balance", lowestPoint: "Lowest point",
+    noOpening: "No opening balance recorded — the balance column shows the change from today. Record one with: npm run liwan -- cash --balance <AED>",
+    pnlMtd: "P&L · business month to date", grossProfit: "Gross profit", done: "Done", net: "Net sales", orders: "Orders", avgTicket: "Avg ticket",
     gm: "Gross margin", op: "Operating profit", rent: "Rent", vsLw: "vs last week", best: "Best sellers", worst: "Slowest sellers",
     alerts: "Stock alerts", noAlerts: "No stock alerts", payback: "Capital payback", recovered: "recovered of", projected: "Projected",
     target: "Target", onTrack: "On track", behind: "Behind target", mtd: "Business month to date", ingredient: "Ingredient", onHand: "On hand",
@@ -17,7 +27,17 @@ export const L = {
     week: "Last 7 days", vat: "VAT collected", cogs: "COGS", waste: "Waste & staff drinks", fixed: "Fixed costs",
   },
   ar: {
-    today: "اليوم", stock: "المخزون", sales: "المبيعات", logout: "خروج", net: "صافي المبيعات", orders: "الطلبات", avgTicket: "متوسط الفاتورة",
+    today: "اليوم", stock: "المخزون", sales: "المبيعات", approvals: "الموافقات", finance: "المالية", logout: "خروج",
+    pendingTitle: "بانتظار الموافقة", nothingPending: "لا يوجد ما ينتظر الموافقة.", approve: "موافقة", reject: "رفض",
+    anyOwner: "تكفي موافقة شريك واحد. تُرسل الطلبات الموافق عليها للمورد بالبريد، أو تُجهز لترسلها بنفسك.",
+    belowMin: "أقل من الحد الأدنى لطلب المورد", awaitingDelivery: "موافق عليها / في الطريق", markSent: "تم الإرسال",
+    markReceived: "وصل التوريد", sendYourself: "أرسل هذه الرسالة للمورد بنفسك، ثم اضغط تم الإرسال:", history: "آخر القرارات",
+    proposedBy: "اقترحه", decidedBy: "بواسطة", expected: "متوقع", inclVat: "شامل الضريبة", copy: "الرسالة",
+    vatQuarter: "ضريبة القيمة المضافة هذا الربع", outputVat: "ضريبة المخرجات (المبيعات)", inputVat: "ضريبة المدخلات (التوريدات)", netPayable: "صافي المستحق حتى الآن",
+    projectedQ: "المتوقع في نهاية الربع", dueOn: "موعد الإقرار والدفع", cashForecast: "توقعات التدفق النقدي (١٣ أسبوعاً)",
+    weekOf: "أسبوع", netCash: "صافي النقد", takings: "المقبوضات", restock: "التوريد", monthly: "التكاليف الشهرية", balance: "الرصيد", lowestPoint: "أدنى رصيد",
+    noOpening: "لم يُسجل رصيد افتتاحي — عمود الرصيد يمثل التغير من اليوم. سجّله بالأمر: npm run liwan -- cash --balance <AED>",
+    pnlMtd: "الأرباح والخسائر · الشهر التشغيلي حتى اليوم", grossProfit: "إجمالي الربح", done: "تم", net: "صافي المبيعات", orders: "الطلبات", avgTicket: "متوسط الفاتورة",
     gm: "هامش الربح الإجمالي", op: "الربح التشغيلي", rent: "الإيجار", vsLw: "مقارنة بالأسبوع الماضي", best: "الأكثر مبيعاً", worst: "الأقل مبيعاً",
     alerts: "تنبيهات المخزون", noAlerts: "لا توجد تنبيهات", payback: "استرداد رأس المال", recovered: "مسترد من", projected: "المتوقع",
     target: "الهدف", onTrack: "على المسار", behind: "متأخر عن الهدف", mtd: "الشهر التشغيلي حتى اليوم", ingredient: "المكوّن", onHand: "المتوفر",
@@ -66,13 +86,19 @@ select,input{width:100%;padding:10px;border:1px solid var(--line);border-radius:
 button{margin-top:14px;width:100%;padding:11px;border:0;border-radius:10px;background:var(--brand);color:var(--surface);font-weight:700;font-size:15px}
 .err{color:var(--bad);font-size:14px}code{background:var(--bg);padding:2px 6px;border-radius:6px}
 @media (max-width:600px){.wide{display:none}}
+.count{display:inline-block;min-width:18px;padding:0 5px;margin-inline-start:4px;border-radius:99px;background:var(--bad);color:#fff;font-size:11px;font-weight:700;text-align:center;line-height:18px}
+.actions{display:flex;gap:8px;margin-top:10px}.actions form{flex:1}.actions button{margin:0}
+button.secondary{background:transparent;color:var(--ink);border:1px solid var(--line)}button.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+pre.msg{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;font:13px/1.45 ui-monospace,Menlo,monospace;margin:8px 0;user-select:all}
+.meta{color:var(--muted);font-size:13px}.warn{color:var(--warn);font-size:13px;font-weight:600}
+nav{display:flex;flex-wrap:wrap;gap:2px}
 .datepick{display:flex;gap:8px;align-items:center;margin-bottom:12px}.datepick input{width:auto;padding:6px 8px;font-size:14px}.datepick button{width:auto;margin:0;padding:7px 12px;font-size:13px}
 `;
 
-export function Page(props: { title: string; lang: Lang; active?: string; owner?: string | null; children: Child }) {
+export function Page(props: { title: string; lang: Lang; active?: string; owner?: string | null; pending?: number; children: Child }) {
   const t = L[props.lang];
-  const navItem = (href: string, key: "today" | "stock" | "sales") => (
-    <a href={href} class={props.active === key ? "on" : ""}>{t[key]}</a>
+  const navItem = (href: string, key: "today" | "stock" | "sales" | "approvals" | "finance", badge = 0) => (
+    <a href={href} class={props.active === key ? "on" : ""}>{t[key]}{badge > 0 && <span class="count">{badge}</span>}</a>
   );
   return (
     <html lang={props.lang} dir={props.lang === "ar" ? "rtl" : "ltr"}>
@@ -87,7 +113,7 @@ export function Page(props: { title: string; lang: Lang; active?: string; owner?
           <header>
             <div class="bar">
               <span class="logo">The Liwan <small>الليوان</small></span>
-              <nav>{navItem("/", "today")}{navItem("/stock", "stock")}{navItem("/sales", "sales")}</nav>
+              <nav>{navItem("/", "today")}{navItem("/stock", "stock")}{navItem("/sales", "sales")}{navItem("/approvals", "approvals", props.pending ?? 0)}{navItem("/finance", "finance")}</nav>
               <span class="tools">
                 <a href={`/lang/${props.lang === "ar" ? "en" : "ar"}`}>{props.lang === "ar" ? "English" : "العربية"}</a>
                 <a href="/logout">{t.logout}</a>

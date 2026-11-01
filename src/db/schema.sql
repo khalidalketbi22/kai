@@ -189,16 +189,24 @@ CREATE TABLE IF NOT EXISTS expenses (
   end_date      TEXT                     -- inclusive; NULL = ongoing
 );
 
--- ---- Phase 2 (purchasing + approvals) — created now so the model is stable ----
+-- ---- Purchasing + approvals (Phase 2) ----
+-- Lifecycle: pending_approval → approved (owner) → sent (to supplier) → received (stock booked in)
+--            pending_approval → cancelled (owner rejected)
 CREATE TABLE IF NOT EXISTS purchase_orders (
   id            INTEGER PRIMARY KEY,
   supplier_id   INTEGER NOT NULL REFERENCES suppliers(id),
   status        TEXT NOT NULL CHECK (status IN ('draft','pending_approval','approved','sent','received','cancelled')),
-  total_fils    INTEGER NOT NULL DEFAULT 0,
+  total_fils    INTEGER NOT NULL DEFAULT 0,   -- ex-VAT
+  vat_fils      INTEGER NOT NULL DEFAULT 0,   -- input VAT (5%), reclaimable
   created_at    TEXT NOT NULL,
-  created_by    TEXT NOT NULL,           -- agent name or owner
+  created_by    TEXT NOT NULL,                -- agent name or owner
   action_id     INTEGER REFERENCES actions(id),
-  note          TEXT
+  note          TEXT,
+  message       TEXT,                         -- text sent (or to send) to the supplier
+  sent_via      TEXT,                         -- email | whatsapp | manual
+  sent_at       TEXT,
+  expected_at   TEXT,
+  received_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS po_lines (
@@ -206,7 +214,9 @@ CREATE TABLE IF NOT EXISTS po_lines (
   po_id                INTEGER NOT NULL REFERENCES purchase_orders(id),
   supplier_product_id  INTEGER NOT NULL REFERENCES supplier_products(id),
   packs                INTEGER NOT NULL,
-  price_fils           INTEGER NOT NULL
+  price_fils           INTEGER NOT NULL,      -- per pack, ex-VAT
+  received_packs       INTEGER,
+  reason               TEXT
 );
 
 -- Every side effect that spends money or contacts a supplier goes through here.

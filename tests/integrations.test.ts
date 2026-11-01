@@ -15,8 +15,14 @@ describe("agent tools", () => {
     });
   });
 
-  it("agents only get Liwan MCP tools — no shell, file or web tools", () => {
-    for (const a of Object.values(AGENTS)) for (const t of a.tools ?? []) expect(t).toMatch(/^mcp__liwan__get_/);
+  it("agents only get Liwan MCP tools — no shell, file or web tools, and nothing that approves or sends", () => {
+    for (const [name, a] of Object.entries(AGENTS)) {
+      for (const t of a.tools ?? []) {
+        expect(t).toMatch(/^mcp__liwan__(get_|propose_)/);
+        expect(t).not.toMatch(/(^|_)(approve|reject|execute|send|pay|payment|receive)(_|s?$)/);
+        if (t.includes("propose_")) expect(name).toBe("purchasing"); // only purchasing can draft orders
+      }
+    }
     for (const t of ORCHESTRATOR_TOOLS) expect(t).toMatch(/^mcp__liwan__get_/);
   });
 

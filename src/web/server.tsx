@@ -5,18 +5,21 @@
  */
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { csrf } from "hono/csrf";
 import { config } from "../config.js";
 import type { DB } from "../db/index.js";
 import { menuMargins, itemPerformance, peakHours, salesSummary, latestBusinessDate } from "../domain/sales.js";
 import { stockStatus, expiryAlerts, shortfalls, type StockRow } from "../domain/inventory.js";
-import { pnlRange } from "../domain/finance.js";
+import { cashForecast, pnlBusinessMonthToDate, pnlRange, vatPosition } from "../domain/finance.js";
+import { ApprovalError, approveAndExecute, decideAction, getAction, listActions, markPurchaseOrderSent, pendingCount, receivePurchaseOrder, type SupplierSender } from "../domain/approvals.js";
+import { getPurchaseOrder, listPurchaseOrders, poNumber } from "../domain/purchasing.js";
 import { formatAed } from "../domain/money.js";
 import { addDays, todayInDubai } from "../domain/periods.js";
 import { buildDailyReport } from "../reports/reports.js";
 import { readSession, signSession, verifyPin } from "./auth.js";
 import { L, Page, type Dict, type Lang } from "./layout.js";
 
-type Env = { Variables: { ownerId: number; ownerName: string; lang: Lang } };
+type Env = { Variables: { ownerId: number; ownerName: string; lang: Lang; pending: number } };
 
 const aed0 = (f: number) => formatAed(f, { decimals: 0 });
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
@@ -33,8 +36,9 @@ function StateBadge({ s, t }: { s: StockRow["state"]; t: Dict }) {
   return <span class={`badge b-${s}`}>{t[s]}</span>;
 }
 
-export function createApp(db: DB) {
+export function createApp(db: DB, deps: { supplierSender?: SupplierSender } = {}) {
   const app = new Hono<Env>();
+  app.use("*", csrf());
 
   app.get("/health", (c) => c.json({ ok: true, latestSalesDate: latestBusinessDate(db) }));
 
@@ -48,6 +52,7 @@ export function createApp(db: DB) {
     if (!owner) return c.redirect("/login");
     c.set("ownerId", owner.id);
     c.set("ownerName", owner.name);
+    c.set("pending", pendingCount(db));
     return next();
   });
 
@@ -103,12 +108,18 @@ export function createApp(db: DB) {
     const last = db.prepare("SELECT file_name, imported_at FROM sales_imports ORDER BY id DESC LIMIT 1").get() as any;
     const p = r.payback;
     return c.html(
-      <Page title={t.today} lang={lang} active="today" owner={c.get("ownerName")}>
+      <Page title={t.today} lang={lang} active="today" owner={c.get("ownerName")} pending={c.get("pending")}>
         <form class="datepick" method="get" action="/">
           <input type="date" name="date" value={date} aria-label="date" />
           <button type="submit">↻</button>
         </form>
         {r.sales.orders === 0 && <div class="card">{t.noData}</div>}
+        {r.pendingApprovals.length > 0 && (
+          <a href="/approvals" style="text-decoration:none;color:inherit"><div class="card" style="border-color:var(--accent)">
+            <b>{`🧾 ${t.pendingTitle}: ${r.pendingApprovals.length}`}</b>
+            <div class="meta">{r.pendingApprovals.map((a) => a.summary.split(" — ")[0]).join(" · ")}</div>
+          </div></a>
+        )}
         <div class="grid">
           <div class="card kpi"><div class="l">{t.net}</div><div class="v">{aed0(r.sales.netExVatFils)}</div><Delta now={r.sales.netExVatFils} before={r.sameDayLastWeek.netExVatFils} t={t} /></div>
           <div class="card kpi"><div class="l">{t.orders}</div><div class="v">{r.sales.orders}</div><Delta now={r.sales.orders} before={r.sameDayLastWeek.orders} t={t} /></div>
@@ -175,7 +186,7 @@ export function createApp(db: DB) {
     const total = rows.reduce((s, r) => s + r.valueFils, 0);
     const name = (i: { nameEn: string; nameAr: string }) => (lang === "ar" ? i.nameAr : i.nameEn);
     return c.html(
-      <Page title={t.stock} lang={lang} active="stock" owner={c.get("ownerName")}>
+      <Page title={t.stock} lang={lang} active="stock" owner={c.get("ownerName")} pending={c.get("pending")}>
         <h1>{t.stock}</h1>
         <div class="sub">{`${date} · ${t.value}: ${aed0(total)}`}</div>
         {(exp.length > 0 || sf.length > 0) && (
@@ -219,7 +230,7 @@ export function createApp(db: DB) {
     const maxD = Math.max(1, ...days.map((d) => d.netSalesFils));
     const name = (i: { nameEn: string; nameAr: string }) => (lang === "ar" ? i.nameAr : i.nameEn);
     return c.html(
-      <Page title={t.sales} lang={lang} active="sales" owner={c.get("ownerName")}>
+      <Page title={t.sales} lang={lang} active="sales" owner={c.get("ownerName")} pending={c.get("pending")}>
         <h1>{t.sales} · {t.week}</h1>
         <form class="datepick" method="get" action="/sales">
           <span class="sub" style="margin:0">{from} →</span>
@@ -254,6 +265,159 @@ export function createApp(db: DB) {
             <thead><tr><th>{t.item}</th><th class="n">{t.price}</th><th class="n">{t.cost}</th><th class="n">{t.margin}</th></tr></thead>
             <tbody>{margins.map((m) => <tr><td>{name(m)}</td><td class="n">{formatAed(m.priceInclVatFils)}</td><td class="n">{formatAed(m.recipeCostFils)}</td><td class="n">{pct(m.marginPct)}</td></tr>)}</tbody>
           </table>
+        </div>
+      </Page>,
+    );
+  });
+
+  // ------------------------------------------------------------- Approvals
+  app.get("/approvals", (c) => {
+    const lang = c.get("lang");
+    const t = L[lang];
+    const pending = listActions(db, ["pending_approval"]);
+    const inFlight = listPurchaseOrders(db, ["approved", "sent"], 20);
+    const history = listActions(db, ["approved", "rejected", "executed", "failed"], 10);
+    const flashId = Number(c.req.query("done"));
+    const flash = flashId ? getAction(db, flashId) : null;
+    const err = c.req.query("error");
+    const money = (f: number) => formatAed(f);
+    return c.html(
+      <Page title={t.approvals} lang={lang} active="approvals" owner={c.get("ownerName")} pending={c.get("pending")}>
+        <h1>{t.pendingTitle}</h1>
+        <div class="sub">{t.anyOwner}</div>
+        {flash && <div class="card"><b>{flash.status === "rejected" ? "✕" : flash.status === "failed" ? "⚠" : "✓"}</b> {flash.result ?? flash.status}</div>}
+        {err && <div class="card err">{err}</div>}
+        {pending.length === 0 && <div class="card">{t.nothingPending}</div>}
+        {pending.map((a) => {
+          const po = a.type === "send_purchase_order" ? getPurchaseOrder(db, a.payload.poId) : null;
+          return (
+            <div class="card">
+              <h2>{po ? `${po.number} · ${po.supplier}` : a.summary}</h2>
+              {po && (
+                <table><tbody>
+                  {po.lines.map((l) => <tr><td>{`${l.packs} × ${l.packDescription}`}<div class="meta">{l.reason}</div></td><td class="n">{money(l.packs * l.priceFils)}</td></tr>)}
+                  <tr><td><b>{t.inclVat}</b></td><td class="n"><b>{money(po.totalFils + po.vatFils)}</b></td></tr>
+                </tbody></table>
+              )}
+              {po?.note && <div class="warn">⚠ {po.note}</div>}
+              <div class="meta">{`${t.proposedBy} ${a.proposedBy} · ${a.proposedAt.slice(0, 16).replace("T", " ")}`}</div>
+              <div class="actions">
+                <form method="post" action={`/approvals/${a.id}/approve`}><button type="submit">{t.approve}</button></form>
+                <form method="post" action={`/approvals/${a.id}/reject`}><button type="submit" class="danger">{t.reject}</button></form>
+              </div>
+            </div>
+          );
+        })}
+
+        {inFlight.length > 0 && <h1 style="margin-top:18px">{t.awaitingDelivery}</h1>}
+        {inFlight.map((po) => (
+          <div class="card">
+            <h2>{`${po.number} · ${po.supplier} · ${money(po.totalFils + po.vatFils)}`}</h2>
+            <div class="meta">{`${po.status}${po.sentVia ? ` (${po.sentVia})` : ""}${po.expectedAt ? ` · ${t.expected} ${po.expectedAt}` : ""}`}</div>
+            {po.status === "approved" && po.message && (<><p class="meta">{t.sendYourself}</p><pre class="msg">{po.message}</pre></>)}
+            <div class="actions">
+              {po.status === "approved" && <form method="post" action={`/orders/${po.id}/sent`}><button type="submit" class="secondary">{t.markSent}</button></form>}
+              <form method="post" action={`/orders/${po.id}/received`}><button type="submit">{t.markReceived}</button></form>
+            </div>
+          </div>
+        ))}
+
+        {history.length > 0 && (
+          <div class="card">
+            <h2>{t.history}</h2>
+            <ul class="alerts">{history.map((a) => <li><b>{a.status}</b> {`${t.decidedBy} ${a.decidedBy ?? "—"} · ${a.summary.split(" · ").slice(0, 2).join(" · ")}`}{a.result && <div class="meta">{a.result}</div>}</li>)}</ul>
+          </div>
+        )}
+      </Page>,
+    );
+  });
+
+  const fail = (c: any, e: unknown) => {
+    if (e instanceof ApprovalError) return c.redirect(`/approvals?error=${encodeURIComponent(e.message)}`);
+    throw e;
+  };
+
+  app.post("/approvals/:id/approve", async (c) => {
+    const id = Number(c.req.param("id"));
+    try {
+      await approveAndExecute(db, id, c.get("ownerId"), deps.supplierSender);
+    } catch (e) { return fail(c, e); }
+    return c.redirect(`/approvals?done=${id}`);
+  });
+
+  app.post("/approvals/:id/reject", (c) => {
+    const id = Number(c.req.param("id"));
+    try {
+      decideAction(db, id, c.get("ownerId"), "reject", `Rejected by ${c.get("ownerName")} in the dashboard`);
+    } catch (e) { return fail(c, e); }
+    return c.redirect(`/approvals?done=${id}`);
+  });
+
+  app.post("/orders/:id/sent", (c) => {
+    try { markPurchaseOrderSent(db, Number(c.req.param("id"))); } catch (e) { return fail(c, e); }
+    return c.redirect("/approvals");
+  });
+
+  app.post("/orders/:id/received", (c) => {
+    try { receivePurchaseOrder(db, Number(c.req.param("id")), new Date().toISOString().slice(0, 19)); } catch (e) { return fail(c, e); }
+    return c.redirect("/stock");
+  });
+
+  // ------------------------------------------------------------- Finance
+  app.get("/finance", (c) => {
+    const lang = c.get("lang");
+    const t = L[lang];
+    const date = latestBusinessDate(db) ?? todayInDubai();
+    const mtd = pnlBusinessMonthToDate(db, date);
+    const vat = vatPosition(db, date);
+    const f = cashForecast(db, date);
+    const k = (x: number) => Math.round(x / 100).toLocaleString("en-US");
+    return c.html(
+      <Page title={t.finance} lang={lang} active="finance" owner={c.get("ownerName")} pending={c.get("pending")}>
+        <h1>{t.finance}</h1>
+        <div class="sub">{date}</div>
+        <div class="two">
+          <div class="card">
+            <h2>{`${t.pnlMtd} · ${mtd.month.start} → ${mtd.month.end}`}</h2>
+            <table><tbody>
+              <tr><td>{t.net}</td><td class="n">{aed0(mtd.totals.netSalesFils)}</td></tr>
+              <tr><td>{t.cogs}</td><td class="n">{aed0(-mtd.totals.cogsFils)}</td></tr>
+              <tr><td>{t.waste}</td><td class="n">{aed0(-mtd.totals.wasteFils)}</td></tr>
+              <tr><td><b>{t.grossProfit}</b> · {pct(mtd.totals.grossMarginPct)}</td><td class="n"><b>{aed0(mtd.totals.grossProfitFils)}</b></td></tr>
+              <tr><td>{t.rent}</td><td class="n">{aed0(-mtd.totals.rentFils)}</td></tr>
+              <tr><td>{t.fixed}</td><td class="n">{aed0(-mtd.totals.fixedCostsFils)}</td></tr>
+              <tr><td><b>{t.op}</b></td><td class="n"><b>{aed0(mtd.totals.operatingProfitFils)}</b></td></tr>
+            </tbody></table>
+          </div>
+          <div class="card">
+            <h2>{`${t.vatQuarter} · ${vat.quarter.start} → ${vat.quarter.end}`}</h2>
+            <table><tbody>
+              <tr><td>{t.outputVat}</td><td class="n">{aed0(vat.outputVatFils)}</td></tr>
+              <tr><td>{t.inputVat}</td><td class="n">{aed0(-vat.inputVatFils)}</td></tr>
+              <tr><td><b>{t.netPayable}</b></td><td class="n"><b>{aed0(vat.netPayableFils)}</b></td></tr>
+              <tr><td>{t.projectedQ}</td><td class="n">{aed0(vat.projectedNetPayableFils)}</td></tr>
+              <tr><td>{t.dueOn}</td><td class="n">{vat.quarter.due}</td></tr>
+            </tbody></table>
+            <p class="meta">{vat.note}</p>
+          </div>
+        </div>
+        <div class="card">
+          <h2>{t.cashForecast}</h2>
+          {!f.openingKnown && <p class="meta">{t.noOpening}</p>}
+          <table>
+            <thead><tr><th>{t.weekOf}</th><th class="n wide">{t.takings}</th><th class="n wide">{t.restock}</th><th class="n wide">{t.rent}</th><th class="n wide">{t.monthly}</th><th class="n">{t.netCash}</th><th class="n">{t.balance}</th></tr></thead>
+            <tbody>{f.weeks.map((w) => (
+              <tr>
+                <td>{w.weekStart.slice(5)}{w.vatPaidFils > 0 && <span class="badge b-low" style="margin-inline-start:4px">VAT</span>}{w.fixedCostsFils > 0 && <span class="badge b-ok" style="margin-inline-start:4px">8th</span>}</td>
+                <td class="n wide">{k(w.takingsFils)}</td><td class="n wide">{k(-w.purchasesFils)}</td><td class="n wide">{k(-w.rentFils)}</td>
+                <td class="n wide">{k(-w.fixedCostsFils - w.vatPaidFils)}</td>
+                <td class={`n ${w.netFils < 0 ? "down" : ""}`}>{k(w.netFils)}</td>
+                <td class={`n ${w.closingFils < 0 ? "down" : ""}`}><b>{k(w.closingFils)}</b></td>
+              </tr>
+            ))}</tbody>
+          </table>
+          <p class="meta">{`${t.lowestPoint}: ${aed0(f.lowestFils)} (${f.lowestWeek})`}</p>
+          <ul class="meta">{f.assumptions.map((a) => <li>{a}</li>)}</ul>
         </div>
       </Page>,
     );

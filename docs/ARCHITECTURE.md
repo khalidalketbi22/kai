@@ -5,9 +5,12 @@
 1. **SQLite is the single source of truth.** All agents read from it, and every money amount is integer fils.
 2. **Agents never do arithmetic.** Depletion, COGS, VAT, rent, P&L and payback are plain TypeScript functions
    (`src/domain/`) with unit tests. Agents call tools that return those results, then interpret and draft.
-3. **Agents can't act alone.** In Phase 1 every agent tool is read-only (`get_*`). From Phase 2, agents can only
-   *propose* an order, payment or supplier message. That creates an `actions` row in `pending_approval`.
-   Separate executor code (not an LLM) carries it out after **any one owner** approves, and logs who and when.
+3. **Agents can't act alone.** Agent tools are read-only (`get_*`) plus one drafting tool for the Purchasing agent
+   (`propose_purchase_orders`). Drafting creates a purchase order and an `actions` row in `pending_approval`.
+   Only an owner can approve or reject, in the dashboard or the CLI. Executor code (`src/domain/approvals.ts`, no LLM)
+   then emails the order to the supplier, or prepares the message for an owner to send. It logs who decided and when.
+   Every transition is a conditional update, so nothing can be approved or sent twice. A test checks that no agent
+   holds an approve, send or pay tool.
 4. **Ports for integrations.** `SalesSource` (Foodics CSV now, Foodics API later), `PaymentsSource` (VaultsPay),
    `Notifier` (WhatsApp, email, console). See `src/integrations/ports.ts`.
 
@@ -41,8 +44,8 @@ Liwan tools and delegate to each other.
 | Orchestrator | 1 | daily/weekly report, P&L, payback, freshness; delegates |
 | Inventory | 1 | stock status, alerts, ingredient usage, recipes, margins |
 | Sales analyst | 1 | sales summary, item performance, peak hours, margins |
-| Purchasing | 2 | + `propose_purchase_order` (reorder point → par, pack rounding, min order, lead time) |
-| Finance | 2 | P&L, VAT quarter, 13-week cash-flow forecast, payback, + `propose_payment` |
+| Purchasing | 2 ✓ | purchase plan, `propose_purchase_orders` (drafts only, wait for approval), pending approvals, orders |
+| Finance | 2 ✓ | P&L, VAT quarter position, 13-week cash-flow forecast, payback |
 | Staff | 3 | rota, hours, payroll prep for the 8th (payroll run = approval action) |
 | Customer/marketing | 4 | reviews, bilingual Instagram ideas tied to slow sellers, posting needs approval |
 
@@ -54,6 +57,17 @@ Liwan tools and delegate to each other.
 - If sales exceed stock on record, the extra is booked as a *shortfall* (movement with no lot), costed at the latest
   price, and flagged as "count needed".
 - Modifiers are `add` (extra shot +18 g) or `swap` (oat milk replaces all the fresh milk 1:1, whatever the drink size).
+
+## Purchasing model
+
+`src/domain/purchasing.ts`, all pure and tested:
+
+- **When to reorder:** expected stock at delivery (on hand − daily usage × lead time) is at or below the reorder point.
+- **How much:** enough to be back at par when the delivery arrives, rounded up to whole supplier packs.
+- **Perishables:** never more than 80% of what can be used before expiry.
+- **Minimum order:** if a supplier's order is below its minimum, other items from that supplier that are below
+  par are topped up. If it's still below, the order is flagged for the owners to decide.
+- **No duplicates:** items already on an open order are skipped.
 
 ## Money model
 
@@ -67,12 +81,17 @@ Liwan tools and delegate to each other.
 
 ## Phase plan
 
-1. **Done:** inventory + sales from a Foodics CSV, P&L core, read-only agents, daily/weekly reports, WhatsApp sender, dashboard.
-2. **Purchasing and finance:**
-   - PO drafts from reorder points.
-   - Approvals in the dashboard and by WhatsApp buttons; the executor sends POs to suppliers once approved.
-   - Receiving POs into stock lots; input VAT from purchases.
-   - Finance agent, 13-week cash-flow forecast, Sunday report with VAT position.
+1. **Done:** inventory + sales from a Foodics CSV, P&L core, read-only agents, daily/weekly reports, dashboard.
+   Email delivery, guided setup.
+2. **Done: purchasing and finance.**
+   - Reorder-point PO drafts: lead time, pack rounding, shelf-life cap, minimum-order top-up, no duplicates.
+   - Hourly check plus one after the nightly import; owners are emailed when approval is needed.
+   - Approvals in the dashboard (CSRF-protected) and the CLI.
+   - Approved POs are emailed to the supplier, or prepared for manual send.
+   - Receiving books stock into lots at PO prices; input VAT is tracked.
+   - Finance agent, VAT quarter position, 13-week cash-flow forecast.
+   - The Sunday report adds VAT, the cash outlook and pending approvals.
+   - Later: approval by WhatsApp buttons, once WhatsApp is set up.
 3. **Staff:** rota, timesheets, payroll prep for the 8th.
 4. **Customer/marketing:** Google Business Profile reviews, Instagram ideas for slow sellers.
 5. **Live connections:**

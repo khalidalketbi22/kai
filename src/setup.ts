@@ -135,6 +135,14 @@ export async function runSetup(envPath = ".env"): Promise<void> {
       console.log("");
     }
 
+    // ---------------------------------------------------------------- suppliers
+    console.log("Suppliers: approved purchase orders are emailed here. Leave empty to send orders yourself (WhatsApp/phone).\n");
+    for (const sp of db.prepare("SELECT id, name, email FROM suppliers ORDER BY name").all() as any[]) {
+      const e = await p.ask(`  ${sp.name} orders email`, sp.email ?? "", (v) => (v === "" || isEmail(v) ? null : "Not a valid email"));
+      db.prepare("UPDATE suppliers SET email = ? WHERE id = ?").run(e || null, sp.id);
+    }
+    console.log("");
+
     // ---------------------------------------------------------------- email
     console.log("Email: the reports are sent from a Gmail account using an App Password (see docs/email.md).\n");
     const host = await p.ask("SMTP server", env.SMTP_HOST || "smtp.gmail.com");

@@ -55,13 +55,47 @@ npm run liwan -- waste milk_fresh 500 --note "spilled"
 npm run liwan -- count beans_espresso 7400    # shelf count in grams
 ```
 
-## 5. Open the dashboard on your phone
+## 5. Purchase orders and approvals
+
+When stock runs low, you'll get an email: "purchase order(s) to approve".
+
+1. Open the dashboard → **Approvals**.
+2. Check the items, then tap **Approve** or **Reject**. Any one owner can decide.
+3. When the delivery arrives, tap **Delivery arrived** so stock and VAT are booked.
+
+Add supplier emails so approved orders go out automatically. Re-run `npm run setup` (answer **No** to wiping the
+data), or:
+
+```bash
+npm run liwan -- supplier --name Biru --email orders@biru.ae
+```
+
+For a better cash forecast, record your bank + till balance now and then:
+
+```bash
+npm run liwan -- cash --balance 25000
+```
+
+## 6. Open the dashboard on your phone
 
 - **Same Wi-Fi:** find the computer's local IP (Mac: System Settings → Wi-Fi → Details; Windows: `ipconfig`) and
   open `http://<that-ip>:8787` on your phone.
 - **From anywhere:** install **Tailscale** (free) on the computer and on each owner's phone, then open
   `http://<computer-name>:8787`. Nothing is exposed to the public internet. If you do this, set `DASHBOARD_URL` in
   `.env` to that address so the email buttons open it.
+
+## 7. Updating to a new version
+
+In Terminal: press `Ctrl + C` to stop the app, then:
+
+```bash
+cd ~/Documents/liwan-ops
+git pull
+npm install
+caffeinate -i npm start
+```
+
+Your data is kept. New database columns are added automatically.
 
 ## Backups
 

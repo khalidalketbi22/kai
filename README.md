@@ -4,7 +4,10 @@ A multi-agent operations system for **The Liwan**, a heritage Emirati specialty 
 It tracks stock at recipe level, analyses sales, runs the P&L and capital-payback maths, and sends owners a daily
 9pm summary and a Sunday weekly report by email (WhatsApp optional). Anything that spends money or contacts a supplier needs an owner's approval.
 
-**Status: Phase 1:** inventory and sales from a Foodics CSV, working end to end with seed data.
+**Status: Phase 2.**
+
+- **Phase 1:** inventory and sales from a Foodics CSV.
+- **Phase 2:** purchasing with owner approvals, VAT and the cash-flow forecast.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the phase plan.
 
 <p>
@@ -32,7 +35,7 @@ npm run seed                    # menu, recipes, suppliers, owners + simulated t
 npm run liwan -- import samples/foodics-2026-11-01.csv   # a day of Foodics sales → stock depletes
 npm run liwan -- summary        # tonight's daily summary (add --lang ar for Arabic)
 npm run liwan -- pnl            # business-month-to-date P&L
-npm test                        # 85 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
+npm test                        # 120 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
 ```
 
 Dashboard (phone-friendly, EN/AR):
@@ -69,8 +72,23 @@ npm run liwan -- summary --send          # daily summary + agent insights → ow
 | `owner --name … [--email] [--phone] [--pin] [--locale ar] [--rename]` | Owner contact, dashboard PIN, language |
 | `owners` / `test-email <addr>` | See who receives reports / check SMTP |
 | `serve` | Dashboard + scheduler |
+| `reorder [--dry-run]` | Draft purchase orders for anything at its reorder point (they wait for approval) |
+| `approvals` · `approve <id> --owner N` · `reject <id> --owner N` | Review and decide. Any one owner can approve |
+| `orders` · `order <po>` · `sent <po>` · `received <po>` | Track orders, mark manual sends, book deliveries into stock |
+| `suppliers` · `supplier --name N --email … [--lead-days] [--min-order]` | Supplier contacts and terms |
+| `vat` · `forecast` · `cash --balance AED` | VAT this quarter, 13-week cash forecast, record bank + till balance |
 
 Drop Foodics CSVs into `data/inbox/`. They are imported automatically at 20:55, before the 21:00 summary.
+
+### Purchasing and approvals
+
+1. Every hour, and right after the nightly import, the system checks stock against reorder points. It drafts one
+   purchase order per supplier (Windmill, Biru, Goldbox) and emails the owners.
+2. Any one owner opens **Approvals** in the dashboard and taps **Approve** or **Reject**. Nothing reaches a supplier
+   before that.
+3. Approved orders are emailed to the supplier. If there's no supplier email on record, you get the message to
+   send by WhatsApp yourself, then tap **Mark as sent**.
+4. When the delivery arrives, tap **Delivery arrived**. Stock goes up at the order's prices, and input VAT is recorded.
 
 ## Before using real numbers
 

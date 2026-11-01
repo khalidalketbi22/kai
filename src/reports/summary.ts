@@ -36,15 +36,21 @@ ${AR_MARK}, then the same bullets in Arabic. No preamble.`;
 const withInsights = (body: string, ins: Insights | null, l: Locale) =>
   ins ? `${body}\n\n*${l === "ar" ? "ملاحظات وإجراءات" : "Insights & actions"}*\n${l === "ar" ? ins.ar : ins.en}` : body;
 
-export async function sendDailySummary(db: DB, date: string, opts: { agent?: boolean; notifier?: Notifier } = {}) {
+export async function sendDailySummary(db: DB, date: string, opts: { agent?: boolean; notifier?: Notifier | Notifier[] } = {}) {
   const report = buildDailyReport(db, date);
   const insights = opts.agent === false ? null : await agentInsights(db, "daily_summary", date);
   const textFor = (l: Locale) => withInsights(renderDailyText(report, l), insights, l);
-  const res = await notifyOwners(db, { textFor, template: { name: config.whatsapp.dailyTemplate, params: dailyTemplateParams(report, config.dashboardUrl) } }, opts.notifier);
+  const subjectFor = (l: Locale) =>
+    `☕ ${l === "ar" ? "الليوان · الملخص اليومي" : "The Liwan · Daily summary"} ${date} · AED ${Math.round(report.sales.netExVatFils / 100).toLocaleString("en-US")}`;
+  const res = await notifyOwners(
+    db,
+    { textFor, subjectFor, link: `${config.dashboardUrl}/?date=${date}`, template: { name: config.whatsapp.dailyTemplate, params: dailyTemplateParams(report, config.dashboardUrl) } },
+    opts.notifier,
+  );
   return { report, insights, ...res };
 }
 
-export async function sendWeeklyReport(db: DB, endDate: string, opts: { agent?: boolean; notifier?: Notifier } = {}) {
+export async function sendWeeklyReport(db: DB, endDate: string, opts: { agent?: boolean; notifier?: Notifier | Notifier[] } = {}) {
   const report = buildWeeklyReport(db, endDate);
   const insights = opts.agent === false ? null : await agentInsights(db, "weekly_report", endDate);
   const textFor = (l: Locale) => withInsights(renderWeeklyText(report, l), insights, l);
@@ -56,6 +62,7 @@ export async function sendWeeklyReport(db: DB, endDate: string, opts: { agent?: 
     `${(report.payback.pctRecovered * 100).toFixed(1)}% of capital back`,
     `${config.dashboardUrl}/sales?to=${report.to}`,
   ];
-  const res = await notifyOwners(db, { textFor, template: { name: config.whatsapp.weeklyTemplate, params } }, opts.notifier);
+  const subjectFor = (l: Locale) => `📊 ${l === "ar" ? "الليوان · التقرير الأسبوعي" : "The Liwan · Weekly report"} ${report.from} → ${report.to}`;
+  const res = await notifyOwners(db, { textFor, subjectFor, link: `${config.dashboardUrl}/sales?to=${report.to}`, template: { name: config.whatsapp.weeklyTemplate, params } }, opts.notifier);
   return { report, insights, ...res };
 }

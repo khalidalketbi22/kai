@@ -23,6 +23,14 @@ export const config = {
     weeklyTemplate: env("WHATSAPP_TEMPLATE_WEEKLY", "liwan_weekly_report"),
     templateLanguage: env("WHATSAPP_TEMPLATE_LANG", "en"),
   },
+  email: {
+    host: env("SMTP_HOST"),
+    port: Number(env("SMTP_PORT", "465")),
+    user: env("SMTP_USER"),
+    pass: env("SMTP_PASS"),
+    from: env("EMAIL_FROM", env("SMTP_USER") ? `The Liwan <${env("SMTP_USER")}>` : ""),
+  },
 };
 
+export const emailConfigured = () => Boolean(config.email.host && config.email.user && config.email.pass);
 export const whatsappConfigured = () => Boolean(config.whatsapp.token && config.whatsapp.phoneNumberId);

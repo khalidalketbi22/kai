@@ -2,7 +2,7 @@
 
 A multi-agent operations system for **The Liwan**, a heritage Emirati specialty coffee kiosk at Arcades, Abu Dhabi.
 It tracks stock at recipe level, analyses sales, runs the P&L and capital-payback maths, and sends owners a daily
-9pm summary and a Sunday weekly report. Anything that spends money or contacts a supplier needs an owner's approval.
+9pm summary and a Sunday weekly report by email (WhatsApp optional). Anything that spends money or contacts a supplier needs an owner's approval.
 
 **Status: Phase 1:** inventory and sales from a Foodics CSV, working end to end with seed data.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the phase plan.
@@ -22,7 +22,7 @@ npm run seed                    # menu, recipes, suppliers, owners + simulated t
 npm run liwan -- import samples/foodics-2026-11-01.csv   # a day of Foodics sales → stock depletes
 npm run liwan -- summary        # tonight's daily summary (add --lang ar for Arabic)
 npm run liwan -- pnl            # business-month-to-date P&L
-npm test                        # 77 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
+npm test                        # 82 tests: depletion, VAT, rent, pro-rating, P&L, payback, importer
 ```
 
 Dashboard (phone-friendly, EN/AR):
@@ -55,7 +55,8 @@ npm run liwan -- summary --send          # daily summary + agent insights → ow
 | `waste <ingredient> <qty> [--reason staff_drink]` | Log waste, staff drinks, samples |
 | `count <ingredient> <qty>` | Physical count, books the difference |
 | `expire` | Write off expired lots as waste |
-| `owner --name … [--phone] [--pin] [--locale ar] [--rename]` | Owner contact, dashboard PIN, language |
+| `owner --name … [--email] [--phone] [--pin] [--locale ar] [--rename]` | Owner contact, dashboard PIN, language |
+| `owners` / `test-email <addr>` | See who receives reports / check SMTP |
 | `serve` | Dashboard + scheduler |
 
 Drop Foodics CSVs into `data/inbox/`. They are imported automatically at 20:55, before the 21:00 summary.
@@ -72,7 +73,22 @@ The seed data is **illustrative**. Edit [`src/seed/data.ts`](src/seed/data.ts) a
 Then compare one real Foodics export against [`src/importers/foodics-csv.ts`](src/importers/foodics-csv.ts).
 Column names are matched by alias, so add any header your export uses to `COLUMNS`.
 
-## WhatsApp
+## Where the reports go
 
-See [docs/whatsapp.md](docs/whatsapp.md) for the Meta setup and the two message templates to submit for approval.
-Until it's configured, summaries print to the console.
+Reports go to every owner on every channel that's set up:
+
+| Channel | Setup | Status |
+|---|---|---|
+| **Email** | [docs/email.md](docs/email.md): Gmail app password, about 5 minutes | Recommended to start |
+| WhatsApp | [docs/whatsapp.md](docs/whatsapp.md): Meta Business number + approved templates | Add later; runs alongside email |
+
+```bash
+npm run liwan -- owner --name "Partner 1" --email partner1@example.com --locale en
+npm run liwan -- owners                     # who gets what, and which channels are active
+npm run liwan -- test-email you@example.com
+npm run liwan -- summary --send --no-agent  # send tonight's summary now
+```
+
+If no channel is configured, summaries print to the console.
+
+<img src="docs/screenshots/email.png" width="260" alt="Daily summary email">

@@ -4,7 +4,9 @@
  */
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { config } from "./config.js";
+import { config, emailConfigured } from "./config.js";
+import { EmailNotifier, textToEmailHtml } from "./integrations/notifiers/email.js";
+import { configuredNotifiers } from "./integrations/notify.js";
 import { openDb, type DB } from "./db/index.js";
 import { currentUnitCost, ingredientIdByCode, recordCount, recordWaste, receiveStock, stockStatus, writeOffExpired } from "./domain/inventory.js";
 import { formatAed } from "./domain/money.js";
@@ -28,14 +30,16 @@ const HELP = `The Liwan Ops
   stock [--date D]                   Stock levels, days of cover and alerts.
   sales [--from D --to D]            Sales summary, best/worst sellers, peak hours (default: last 7 days).
   pnl [--from D --to D]              Profit & loss (default: business month to date).
-  summary [--weekly] [--date D] [--send] [--no-agent] [--lang en|ar]
+  summary [--weekly] [--date D] [--send] [--no-agent] [--lang en|ar] [--preview-email file.html]
                                      Print (or --send to owners) the daily summary / weekly report.
   ask "<question>" [--verbose]       Ask the agent team (needs ANTHROPIC_API_KEY).
   receive <ingredient> <packs>       Log a delivery of N supplier packs at the current pack price.
   waste <ingredient> <qty> [--reason waste|staff_drink|sample] [--note text]
   count <ingredient> <qty>           Record a physical stock count (books the difference).
   expire [--date D]                  Write off expired stock lots as waste.
-  owner --name N [--phone +971…] [--pin 1234] [--locale en|ar] [--rename NEW]
+  owners                             List owners and where their reports go.
+  owner --name N [--email a@b.com] [--phone +971…] [--pin 1234] [--locale en|ar] [--rename NEW]
+  test-email <address>               Send a test email to check the SMTP settings.
   serve [--no-scheduler]             Start the dashboard (+ 21:00 daily / Sunday weekly scheduler).
 
 Ingredient codes: run "stock" to list them. Dates: YYYY-MM-DD.`;
@@ -47,7 +51,7 @@ const { positionals, values } = parseArgs({
     date: { type: "string" }, from: { type: "string" }, to: { type: "string" },
     weekly: { type: "boolean" }, send: { type: "boolean" }, "no-agent": { type: "boolean" }, lang: { type: "string" },
     verbose: { type: "boolean" }, reason: { type: "string" }, note: { type: "string" },
-    name: { type: "string" }, phone: { type: "string" }, pin: { type: "string" }, locale: { type: "string" }, rename: { type: "string" },
+    name: { type: "string" }, phone: { type: "string" }, email: { type: "string" }, "preview-email": { type: "string" }, pin: { type: "string" }, locale: { type: "string" }, rename: { type: "string" },
     "no-scheduler": { type: "boolean" }, help: { type: "boolean", short: "h" },
   },
 });
@@ -129,9 +133,14 @@ async function main() {
       const lang = values.lang === "ar" ? "ar" : "en";
       if (values.send) {
         const r = values.weekly ? await sendWeeklyReport(db, date, { agent: !values["no-agent"] }) : await sendDailySummary(db, date, { agent: !values["no-agent"] });
-        return console.log(`Sent to ${r.sent} recipient(s), ${r.failed} failed.`);
+        return console.log(`Sent ${r.sent} message(s), ${r.failed} failed.`);
       }
-      console.log(values.weekly ? renderWeeklyText(buildWeeklyReport(db, date), lang) : renderDailyText(buildDailyReport(db, date), lang));
+      const text = values.weekly ? renderWeeklyText(buildWeeklyReport(db, date), lang) : renderDailyText(buildDailyReport(db, date), lang);
+      if (values["preview-email"]) {
+        writeFileSync(values["preview-email"], textToEmailHtml(text, { dashboardUrl: config.dashboardUrl }));
+        return console.log(`Email preview written to ${values["preview-email"]}`);
+      }
+      console.log(text);
       return;
     }
     case "ask": {
@@ -172,14 +181,36 @@ async function main() {
       return console.log(`Wrote off ${r.lots} expired lot(s), cost ${formatAed(Math.round(r.cost))}.`);
     }
     case "owner": {
-      if (!values.name) throw new Error("Usage: owner --name N [--phone +971…] [--pin 1234] [--locale en|ar] [--rename NEW]");
+      if (!values.name) throw new Error("Usage: owner --name N [--email a@b.com] [--phone +971…] [--pin 1234] [--locale en|ar] [--rename NEW]");
       const exists = db.prepare("SELECT id FROM owners WHERE name = ?").get(values.name);
       if (!exists) throw new Error(`No owner named "${values.name}". Owners: ${(db.prepare("SELECT name FROM owners").all() as any[]).map((o) => o.name).join(", ")}`);
       if (values.phone) db.prepare("UPDATE owners SET phone = ? WHERE name = ?").run(values.phone, values.name);
+      if (values.email) {
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(values.email)) throw new Error(`Not an email address: ${values.email}`);
+        db.prepare("UPDATE owners SET email = ? WHERE name = ?").run(values.email, values.name);
+      }
       if (values.locale) db.prepare("UPDATE owners SET locale = ? WHERE name = ?").run(values.locale === "ar" ? "ar" : "en", values.name);
       if (values.pin) setOwnerPin(db, values.name, values.pin);
       if (values.rename) db.prepare("UPDATE owners SET name = ? WHERE name = ?").run(values.rename, values.name);
       return console.log(`Updated owner ${values.rename ?? values.name}.`);
+    }
+    case "owners": {
+      const channels = configuredNotifiers().map((n) => n.channel).join(" + ");
+      console.log(`Active channels: ${channels}\n`);
+      for (const o of db.prepare("SELECT name, email, phone, locale, pin_hash IS NOT NULL AS pin FROM owners ORDER BY id").all() as any[]) {
+        console.log(`${o.name.padEnd(14)} email: ${(o.email ?? "—").padEnd(28)} phone: ${(o.phone ?? "—").padEnd(15)} lang: ${o.locale}  dashboard PIN: ${o.pin ? "set" : "—"}`);
+      }
+      return;
+    }
+    case "test-email": {
+      if (!args[0]) throw new Error("Usage: test-email <address>");
+      if (!emailConfigured()) throw new Error("Email is not configured: set SMTP_HOST, SMTP_USER, SMTP_PASS in .env (see docs/email.md).");
+      await new EmailNotifier(config.email).send({
+        to: args[0],
+        subject: "The Liwan · test email",
+        text: "☕ The Liwan · test email\n\nIf you can read this, the 9pm summary and Sunday report will reach you by email.",
+      });
+      return console.log(`Test email sent to ${args[0]}.`);
     }
     case "serve": {
       const { serve } = await import("@hono/node-server");

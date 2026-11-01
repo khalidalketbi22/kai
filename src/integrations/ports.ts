@@ -45,6 +45,8 @@ export interface PaymentsSource {
 export interface OutboundMessage {
   to: string;                       // phone (E.164) or email
   text: string;                     // full text (used for session messages / email / console)
+  subject?: string;                 // email subject
+  html?: string;                    // email HTML body
   template?: { name: string; language: string; params: string[] }; // WhatsApp business-initiated template
 }
 
